@@ -10,7 +10,8 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item :label="t('provider.apiStyles')">
           <el-tag v-if="provider?.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
-          <el-tag v-if="provider?.anthropic_base_url" type="primary">Anthropic</el-tag>
+          <el-tag v-if="provider?.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
+          <el-tag v-if="provider?.gemini_base_url" type="warning">Gemini</el-tag>
         </el-descriptions-item>
         <el-descriptions-item :label="t('common.status')">
           <el-tag :type="provider?.enabled ? 'success' : 'info'">
@@ -20,8 +21,9 @@
         <el-descriptions-item :label="t('provider.lastSync')">{{ formatDateTime(provider?.last_sync_at) }}</el-descriptions-item>
       </el-descriptions>
       <div class="actions">
-        <el-button type="primary" @click="syncModels" :loading="syncing">{{ t('provider.syncModels') }}</el-button>
-        <el-button type="success" @click="showAddDialog">{{ t('provider.addModel') }}</el-button>
+        <el-button type="success" @click="testAllModels" :loading="testingAll" :disabled="models.length === 0">测试全部</el-button>
+        <el-button type="danger" plain @click="removeFailedModels" :disabled="failedCount === 0">删除不可用 ({{ failedCount }})</el-button>
+        <el-button type="primary" @click="showAddDialog">{{ t('provider.addModel') }}</el-button>
         <el-button type="warning" @click="testCustomModel">{{ t('provider.customTest') }}</el-button>
         <el-button type="danger" @click="handleBatchDelete" :disabled="selectedIds.length === 0">{{ t('common.batchDelete') }} ({{ selectedIds.length }})</el-button>
       </div>
@@ -225,7 +227,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -243,6 +245,7 @@ const models = ref<any[]>([])
 const selectedIds = ref<number[]>([])
 const loading = ref(false)
 const syncing = ref(false)
+const testingAll = ref(false)
 const dialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const detailModel = ref<any>(null)
@@ -295,16 +298,58 @@ function handleSelectionChange(selection: any[]) {
   selectedIds.value = selection.map(item => item.id)
 }
 
-async function syncModels() {
-  syncing.value = true
+const failedCount = computed(() => models.value.filter(m => !m.is_available).length)
+
+// 测试全部模型（异步并发）
+async function testAllModels() {
+  if (models.value.length === 0) return
+  testingAll.value = true
+  const items = models.value.map((m, i) => ({ model: m, index: i }))
   try {
-    await api.post(`/providers/${providerId}/sync`)
-    ElMessage.success(t('common.success'))
+    await Promise.allSettled(items.map(({ model }) => testModelAsync(model)))
+    await fetchProvider()
+    const ok = models.value.filter(m => m.is_available).length
+    const fail = models.value.filter(m => !m.is_available).length
+    ElMessage.success(`测试完成：${ok} 可用，${fail} 不可用`)
+  } finally {
+    testingAll.value = false
+  }
+}
+
+async function testModelAsync(model: any) {
+  model._testing = true
+  try {
+    const res = await api.post(`/providers/${providerId}/models/${model.id}/test`)
+    const tests = res.data.tests || []
+    const allOk = tests.length > 0 && tests.every((t: any) => t.success)
+    if (allOk) {
+      model.is_available = true
+    } else {
+      model.is_available = false
+    }
+  } catch (e: any) {
+    model.is_available = false
+  } finally {
+    model._testing = false
+  }
+}
+
+async function removeFailedModels() {
+  const failed = models.value.filter(m => !m.is_available)
+  if (failed.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 ${failed.length} 个不可用模型？`,
+      '删除不可用模型',
+      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+    for (const m of failed) {
+      await api.delete(`/providers/${providerId}/models/${m.id}`)
+    }
+    ElMessage.success(`已删除 ${failed.length} 个不可用模型`)
     fetchProvider()
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || t('common.error'))
-  } finally {
-    syncing.value = false
+    if (e !== 'cancel') ElMessage.error(e.response?.data?.error || '删除失败')
   }
 }
 
@@ -399,6 +444,8 @@ async function testModel(model: any) {
   try {
     const res = await api.post(`/providers/${providerId}/models/${model.id}/test`)
     testResults.value = res.data.tests || []
+    // 测试成功后刷新模型列表以同步 is_available
+    await fetchProvider()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
     testDialogVisible.value = false

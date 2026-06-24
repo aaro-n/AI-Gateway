@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"ai-gateway/internal/model"
+	providerPkg "ai-gateway/internal/provider"
 	"ai-gateway/internal/router"
 )
 
@@ -17,6 +19,7 @@ type createProviderRequest struct {
 	Name             string `json:"name" binding:"required"`
 	OpenAIBaseURL    string `json:"openai_base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
+	GeminiBaseURL    string `json:"gemini_base_url"`
 	APIKey           string `json:"api_key" binding:"required"`
 	Priority         int    `json:"priority"`
 }
@@ -25,6 +28,7 @@ type updateProviderRequest struct {
 	Name             string  `json:"name"`
 	OpenAIBaseURL    *string `json:"openai_base_url"`
 	AnthropicBaseURL *string `json:"anthropic_base_url"`
+	GeminiBaseURL    *string `json:"gemini_base_url"`
 	APIKey           string  `json:"api_key"`
 	Enabled          *bool   `json:"enabled"`
 	Priority         *int    `json:"priority"`
@@ -35,6 +39,7 @@ type providerResponse struct {
 	Name             string                  `json:"name"`
 	OpenAIBaseURL    string                  `json:"openai_base_url"`
 	AnthropicBaseURL string                  `json:"anthropic_base_url"`
+	GeminiBaseURL    string                  `json:"gemini_base_url"`
 	APIKeyMasked     string                  `json:"api_key_masked"`
 	Enabled          bool                    `json:"enabled"`
 	Priority         int                     `json:"priority"`
@@ -65,6 +70,7 @@ func (h *ProviderHandler) List(c *gin.Context) {
 			Name:             p.Name,
 			OpenAIBaseURL:    p.OpenAIBaseURL,
 			AnthropicBaseURL: p.AnthropicBaseURL,
+			GeminiBaseURL:    p.GeminiBaseURL,
 			APIKeyMasked:     maskAPIKey(p.APIKey),
 			Enabled:          p.Enabled,
 			Priority:         p.Priority,
@@ -99,6 +105,7 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
+		GeminiBaseURL:    provider.GeminiBaseURL,
 		APIKeyMasked:     maskAPIKey(provider.APIKey),
 		Enabled:          provider.Enabled,
 		Priority:         provider.Priority,
@@ -118,12 +125,13 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		Name:             req.Name,
 		OpenAIBaseURL:    strings.TrimSuffix(req.OpenAIBaseURL, "/"),
 		AnthropicBaseURL: strings.TrimSuffix(req.AnthropicBaseURL, "/"),
+		GeminiBaseURL:    strings.TrimSuffix(req.GeminiBaseURL, "/"),
 		APIKey:           req.APIKey,
 		Enabled:          true,
 		Priority:         req.Priority,
 	}
 
-	if provider.OpenAIBaseURL == "" && provider.AnthropicBaseURL == "" {
+	if provider.OpenAIBaseURL == "" && provider.AnthropicBaseURL == "" && provider.GeminiBaseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
 		return
 	}
@@ -138,6 +146,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
+		GeminiBaseURL:    provider.GeminiBaseURL,
 		APIKeyMasked:     maskAPIKey(provider.APIKey),
 		Enabled:          provider.Enabled,
 		Priority:         provider.Priority,
@@ -176,6 +185,9 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if req.AnthropicBaseURL != nil {
 		updates["anthropic_base_url"] = strings.TrimSuffix(*req.AnthropicBaseURL, "/")
 	}
+	if req.GeminiBaseURL != nil {
+		updates["gemini_base_url"] = strings.TrimSuffix(*req.GeminiBaseURL, "/")
+	}
 
 	if req.APIKey != "" {
 		updates["api_key"] = req.APIKey
@@ -187,20 +199,24 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		updates["priority"] = *req.Priority
 	}
 
-	if req.OpenAIBaseURL != nil || req.AnthropicBaseURL != nil || req.APIKey != "" || req.Enabled != nil {
+	if req.OpenAIBaseURL != nil || req.AnthropicBaseURL != nil || req.GeminiBaseURL != nil || req.APIKey != "" || req.Enabled != nil {
 		router.ClearAllCooldownsForProvider(provider.ID)
 	}
 
 	// 验证更新后至少有一个 BaseURL
 	newOpenAIBaseURL := provider.OpenAIBaseURL
 	newAnthropicBaseURL := provider.AnthropicBaseURL
+	newGeminiBaseURL := provider.GeminiBaseURL
 	if openaiURL, ok := updates["openai_base_url"].(string); ok {
 		newOpenAIBaseURL = openaiURL
 	}
 	if anthropicURL, ok := updates["anthropic_base_url"].(string); ok {
 		newAnthropicBaseURL = anthropicURL
 	}
-	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" {
+	if geminiURL, ok := updates["gemini_base_url"].(string); ok {
+		newGeminiBaseURL = geminiURL
+	}
+	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" && newGeminiBaseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
 		return
 	}
@@ -222,6 +238,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
+		GeminiBaseURL:    provider.GeminiBaseURL,
 		APIKeyMasked:     maskAPIKey(provider.APIKey),
 		Enabled:          provider.Enabled,
 		Priority:         provider.Priority,
@@ -237,33 +254,85 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 查询所有 ProviderModel IDs
-	var providerModelIDs []uint
-	model.DB.Model(&model.ProviderModel{}).Where("provider_id = ?", id).Pluck("id", &providerModelIDs)
+	// 使用事务确保数据一致性
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		var providerModelIDs []uint
+		tx.Model(&model.ProviderModel{}).Where("provider_id = ?", id).Pluck("id", &providerModelIDs)
 
-	// 硬删除关联的 ModelMapping
-	if len(providerModelIDs) > 0 {
-		if err := model.DB.Where("provider_model_id IN ?", providerModelIDs).Delete(&model.ModelMapping{}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		if len(providerModelIDs) > 0 {
+			if err := tx.Where("provider_model_id IN ?", providerModelIDs).Delete(&model.ModelMapping{}).Error; err != nil {
+				return err
+			}
 		}
-	}
 
-	// 硬删除关联的 ProviderModel
-	if err := model.DB.Where("provider_id = ?", id).Delete(&model.ProviderModel{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+		if err := tx.Where("provider_id = ?", id).Delete(&model.ProviderModel{}).Error; err != nil {
+			return err
+		}
 
-	// 软删除 Provider
-	if err := model.DB.Delete(&model.Provider{}, id).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := tx.Delete(&model.Provider{}, id).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete provider"})
 		return
 	}
 
 	router.ClearAllCooldownsForProvider(uint(id))
 
 	c.JSON(http.StatusOK, gin.H{"message": "provider deleted"})
+}
+
+type testConnectionRequest struct {
+	OpenAIBaseURL    string `json:"openai_base_url"`
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+	GeminiBaseURL    string `json:"gemini_base_url"`
+	APIKey           string `json:"api_key"`
+}
+
+func (h *ProviderHandler) TestConnection(c *gin.Context) {
+	var req testConnectionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	openaiURL := strings.TrimSuffix(req.OpenAIBaseURL, "/")
+	anthropicURL := strings.TrimSuffix(req.AnthropicBaseURL, "/")
+	geminiURL := strings.TrimSuffix(req.GeminiBaseURL, "/")
+	apiKey := req.APIKey
+
+	if apiKey == "DUMMY_KEY_FOR_EDIT" || apiKey == "" {
+		var existing model.Provider
+		if openaiURL != "" {
+			model.DB.Where("openai_base_url = ?", openaiURL).First(&existing)
+		} else if anthropicURL != "" {
+			model.DB.Where("anthropic_base_url = ?", anthropicURL).First(&existing)
+		} else if geminiURL != "" {
+			model.DB.Where("gemini_base_url = ?", geminiURL).First(&existing)
+		}
+		if existing.ID > 0 {
+			apiKey = existing.APIKey
+		}
+	}
+
+	providerImpl := providerPkg.NewAutomatedProvider(
+		openaiURL,
+		anthropicURL,
+		geminiURL,
+		apiKey,
+	)
+	models, err := providerImpl.SyncModels(0)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Connection test successful!",
+		"models":  models,
+	})
 }
 
 func (h *ProviderHandler) Test(c *gin.Context) {
@@ -279,7 +348,41 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "connection test not implemented yet"})
+	providerImpl := providerPkg.NewAutomatedProvider(
+		provider.OpenAIBaseURL,
+		provider.AnthropicBaseURL,
+		provider.GeminiBaseURL,
+		provider.APIKey,
+	)
+	models, err := providerImpl.SyncModels(provider.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Connection test successful!",
+		"models":  models,
+	})
+}
+
+type protocolMetaResponse struct {
+	Name           string `json:"name"`
+	KeyPrefix      string `json:"key_prefix"`
+	DefaultBaseURL string `json:"default_base_url"`
+}
+
+func (h *ProviderHandler) GetProtocolsMeta(c *gin.Context) {
+	protocols := providerPkg.AllProtocols()
+	result := make([]protocolMetaResponse, 0, len(protocols))
+	for _, p := range protocols {
+		result = append(result, protocolMetaResponse{
+			Name:           p.Name,
+			KeyPrefix:      p.KeyPrefix,
+			DefaultBaseURL: p.DefaultBaseURL,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"protocols": result})
 }
 
 func maskAPIKey(key string) string {

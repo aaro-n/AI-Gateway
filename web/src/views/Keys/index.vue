@@ -13,6 +13,13 @@
       <el-table :data="keys" stripe v-loading="loading" @selection-change="handleSelectionChange" :default-sort="defaultSort" @sort-change="handleSortChange">
         <el-table-column type="selection" width="50" />
         <el-table-column prop="name" :label="t('key.name')" width="180" sortable />
+        <el-table-column :label="'访问模式'" width="160">
+          <template #default="{ row }">
+            <el-tag v-if="row.access_mode === 'mapping'" type="info">模型映射</el-tag>
+            <el-tag v-else-if="row.access_mode === 'direct'" type="success">厂商直连</el-tag>
+            <el-tag v-else type="warning">混合模式</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="key" :label="t('key.key')" width="240" />
         <el-table-column :label="t('key.model')" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
           <template #default="{ row }">
@@ -58,6 +65,13 @@
          <el-form-item :label="t('key.name')" required>
            <el-input v-model="form.name" />
          </el-form-item>
+         <el-form-item :label="'访问模式'">
+           <el-radio-group v-model="form.access_mode">
+             <el-radio label="mapping">模型映射模式 (隐藏厂商模型)</el-radio>
+             <el-radio label="direct">直连厂商模式 (支持原生SDK)</el-radio>
+             <el-radio label="hybrid">混合双轨模式 (兼顾两者)</el-radio>
+           </el-radio-group>
+         </el-form-item>
        </el-form>
        <template #footer>
          <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -102,7 +116,8 @@ const submitting = ref(false)
 const defaultSort = getSortConfig('keys', 'name')
 
 const form = reactive({
-  name: ''
+  name: '',
+  access_mode: 'mapping'
 })
 
 onMounted(() => {
@@ -128,8 +143,10 @@ async function showDialog(key?: any) {
   
   if (key) {
     form.name = key.name || ''
+    form.access_mode = key.access_mode || 'mapping'
   } else {
     form.name = ''
+    form.access_mode = 'mapping'
   }
   
   dialogVisible.value = true
@@ -139,11 +156,11 @@ async function handleSubmit() {
   submitting.value = true
   try {
     if (editingId.value) {
-      await api.put(`/keys/${editingId.value}`, { name: form.name })
+      await api.put(`/keys/${editingId.value}`, { name: form.name, access_mode: form.access_mode })
       ElMessage.success(t('common.success'))
       dialogVisible.value = false
     } else {
-      const res = await api.post('/keys', { name: form.name })
+      const res = await api.post('/keys', { name: form.name, access_mode: form.access_mode })
       newKey.value = res.data.raw_key
       dialogVisible.value = false
       keyDialogVisible.value = true

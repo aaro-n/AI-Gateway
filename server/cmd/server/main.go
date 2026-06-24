@@ -5,19 +5,35 @@ import (
 	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/config"
+	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/handler"
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
 	"ai-gateway/internal/provider"
 	"ai-gateway/res"
+
+	// 错误日志（终端输出）
+	coreErrors "ai-gateway/internal/core/errors"
+
+	// 协议插件（init() 自注册）
+	_ "ai-gateway/internal/protocols/anthropic"
+	_ "ai-gateway/internal/protocols/gemini"
+	_ "ai-gateway/internal/protocols/openai"
 )
 
 func main() {
+	// 日志级别（环境变量 AG_LOG_LEVEL=debug|info|warn|error）
+	if lv := os.Getenv("AG_LOG_LEVEL"); lv != "" {
+		coreErrors.SetLevel(coreErrors.ParseLevel(lv))
+		log.Printf("[Config] Log level set to: %s", lv)
+	}
+
 	cfg := config.Load()
 
 	log.Printf("AI Gateway %s", res.Version)
@@ -69,36 +85,32 @@ func main() {
 		cfg.Server.Session.SameSite,
 	))
 
+	// 错误日志中间件（panic 恢复 + HTTP 状态上报 → 终端输出）
+	r.Use(coreErrors.GinRecovery())
+	r.Use(coreErrors.GinErrorReporter())
+
 	authHandler := handler.NewAuthHandler()
 	providerHandler := handler.NewProviderHandler()
 	providerModelHandler := handler.NewProviderModelHandler()
 	modelHandler := handler.NewModelHandler()
 	keyHandler := handler.NewKeyHandler()
-	openAIProxyHandler := handler.NewOpenAIProxyHandler()
-	anthropicProxyHandler := handler.NewAnthropicProxyHandler()
+	gatewayProxyHandler := handler.NewGatewayProxyHandler()
 	usageHandler := handler.NewUsageHandler()
 	mcpProxyHandler := handler.NewMCPProxyHandler()
 	mcpHandler := handler.NewMCPHandler()
 	modelTestHandler := handler.NewModelTestHandler()
 
-	openai := r.Group("/openai/v1")
-	openai.Use(middleware.RequireAPIKey())
+	// Wildcard Unified Gateway Router Group
+	gateway := r.Group("/gateway/:protocol")
 	{
-		openai.POST("/chat/completions", openAIProxyHandler.ChatCompletions)
-		openai.GET("/models", openAIProxyHandler.ListModels)
-		openai.GET("/models/:id", openAIProxyHandler.GetModel)
-	}
-
-	anthropic := r.Group("/anthropic/v1")
-	anthropic.Use(middleware.RequireAPIKeyForAnthropic())
-	{
-		anthropic.POST("/messages", anthropicProxyHandler.Messages)
-		anthropic.GET("/models", anthropicProxyHandler.ListModels)
-		anthropic.GET("/models/:id", anthropicProxyHandler.GetModel)
+		// Match specific methods or paths and delegate to generic proxy dispatcher
+		gateway.POST("/*path", gatewayProxyHandler.HandleRequest)
+		gateway.GET("/*path", gatewayProxyHandler.HandleRequest)
+		gateway.DELETE("/*path", gatewayProxyHandler.HandleRequest)
 	}
 
 	mcp := r.Group("/mcp/v1")
-	mcp.Use(middleware.RequireAPIKey())
+	mcp.Use(middleware.RequireAPIKeyForMCP())
 	{
 		mcp.GET("", mcpProxyHandler.Handle)
 		mcp.POST("", mcpProxyHandler.Handle)
@@ -120,6 +132,9 @@ func main() {
 			protected.PUT("/auth/password", authHandler.ChangePassword)
 
 			protected.GET("/providers", providerHandler.List)
+			protected.GET("/providers/meta/protocols", providerHandler.GetProtocolsMeta)
+			protected.POST("/providers/test-connection", providerHandler.TestConnection)
+			protected.POST("/providers/test-model", modelTestHandler.TestUnsavedProviderModel)
 			protected.GET("/providers/:id", providerHandler.Get)
 			protected.POST("/providers", providerHandler.Create)
 			protected.PUT("/providers/:id", providerHandler.Update)
@@ -133,6 +148,7 @@ func main() {
 			protected.DELETE("/providers/:id/models/:mid", providerModelHandler.Delete)
 			protected.POST("/providers/:id/sync", providerModelHandler.Sync)
 			protected.POST("/providers/:id/models/:mid/test", modelTestHandler.TestProviderModel)
+			protected.GET("/providers/:id/test-results", modelTestHandler.GetTestResults)
 
 			protected.GET("/models", modelHandler.List)
 			protected.POST("/models", modelHandler.Create)
@@ -190,6 +206,26 @@ func main() {
 			protected.PUT("/mcps/resources/:id", mcpHandler.UpdateResource)
 			protected.GET("/mcps/:id/prompts", mcpHandler.ListPrompts)
 			protected.PUT("/mcps/prompts/:id", mcpHandler.UpdatePrompt)
+
+			// ── 新增：协议元数据（前端动态渲染）──
+			protected.GET("/protocols", func(c *gin.Context) {
+				all := registry.All()
+				result := make([]gin.H, 0, len(all))
+				for _, desc := range all {
+					result = append(result, gin.H{
+						"name":             desc.Name,
+						"label":            desc.Label,
+						"key_prefix":       desc.KeyPrefix,
+						"default_base_url": desc.DefaultBaseURL,
+						"form_schema":      desc.FormSchema,
+					})
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"protocols":        result,
+					"test_concurrency": cfg.Server.TestConcurrency,
+				})
+			})
+
 		}
 	}
 

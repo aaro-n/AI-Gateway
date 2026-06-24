@@ -22,9 +22,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port           int
-	TrustedProxies []string
-	Session        SessionConfig
+	Port            int
+	TrustedProxies  []string
+	Session         SessionConfig
+	TestConcurrency int // 模型测试并发数，默认 5，环境变量 AG_TEST_CONCURRENCY
 }
 
 type DebugConfig struct {
@@ -124,8 +125,9 @@ func Load() *Config {
 			MCP:      getBool("AG_DEBUG_MCP", yamlCfg.Debug.MCP),
 		},
 		Server: ServerConfig{
-			Port:           getInt("AG_SERVER_PORT", yamlCfg.Server.Port),
-			TrustedProxies: trustedProxies,
+			Port:            getInt("AG_SERVER_PORT", yamlCfg.Server.Port),
+			TrustedProxies:  trustedProxies,
+			TestConcurrency: getInt("AG_TEST_CONCURRENCY", yamlCfg.Server.TestConcurrency),
 			Session: SessionConfig{
 				Secret:   secret,
 				MaxAge:   getInt("AG_SERVER_SESSION_MAX_AGE", yamlCfg.Server.Session.MaxAge),
@@ -188,6 +190,9 @@ func applyDefaults() {
 	}
 	if cfg.Pprof.Port == 0 {
 		cfg.Pprof.Port = 6060
+	}
+	if cfg.Server.TestConcurrency <= 0 {
+		cfg.Server.TestConcurrency = 5
 	}
 
 	poolDefaults := getPoolDefaults(cfg.Database.Type)

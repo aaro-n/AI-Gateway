@@ -35,10 +35,12 @@ type Provider struct {
 	Name             string `gorm:"uniqueIndex"`
 	OpenAIBaseURL    string `gorm:"column:openai_base_url"`
 	AnthropicBaseURL string `gorm:"column:anthropic_base_url"`
+	GeminiBaseURL    string `gorm:"column:gemini_base_url"`
 	APIKey           string
 	Enabled          bool   `gorm:"type:boolean;default:true"`
 	Priority         int    `gorm:"default:0"`
 	Config           string `gorm:"type:text"`
+	Endpoints        string `gorm:"type:text"` // JSON: {"openai":"https://...","gemini":"https://..."}
 	LastSyncAt       *time.Time
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -51,9 +53,9 @@ func (Provider) TableName() string {
 }
 
 type ProviderModel struct {
-	ID             uint `gorm:"primaryKey"`
-	ProviderID     uint `gorm:"index"`
-	ModelID        string
+	ID             uint   `gorm:"primaryKey"`
+	ProviderID     uint   `gorm:"uniqueIndex:idx_provider_model"`
+	ModelID        string `gorm:"uniqueIndex:idx_provider_model"`
 	DisplayName    string
 	OwnedBy        string
 	ContextWindow  int     `gorm:"default:0"`
@@ -68,6 +70,7 @@ type ProviderModel struct {
 	Source         string  `gorm:"default:sync"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Provider       *Provider `gorm:"foreignKey:ProviderID;references:ID"`
 }
 
 func (ProviderModel) TableName() string {
@@ -182,10 +185,11 @@ func (MCPPrompt) TableName() string {
 }
 
 type Key struct {
-	ID      uint   `gorm:"primaryKey"`
-	Key     string `gorm:"uniqueIndex"`
-	Name    string
-	Enabled bool `gorm:"type:boolean;default:true"`
+	ID         uint   `gorm:"primaryKey"`
+	Key        string `gorm:"uniqueIndex"`
+	Name       string
+	Enabled    bool   `gorm:"type:boolean;default:true"`
+	AccessMode string `gorm:"type:varchar(50);default:'mapping'"` // "mapping", "direct", "hybrid"
 
 	ExpiresAt *time.Time
 	CreatedAt time.Time
@@ -195,10 +199,23 @@ type Key struct {
 	MCPTools     []KeyMCPTool
 	MCPResources []KeyMCPResource
 	MCPPrompts   []KeyMCPPrompt
+	Formats      []KeyFormat `gorm:"foreignKey:KeyID"`
 }
 
 func (Key) TableName() string {
 	return "keys"
+}
+
+type KeyFormat struct {
+	ID           uint   `gorm:"primaryKey"`
+	KeyID        uint   `gorm:"index;not null"`
+	Format       string `gorm:"size:50;index;not null"`        // "openai", "anthropic", "gemini"
+	FormattedKey string `gorm:"uniqueIndex;size:255;not null"` // "sk-...", "sk-ant-...", "AIzaSy..."
+	CreatedAt    time.Time
+}
+
+func (KeyFormat) TableName() string {
+	return "key_formats"
 }
 
 type KeyModel struct {
@@ -290,6 +307,26 @@ func (u *ModelLog) String() string {
 		u.CachedTokens, u.InputTokens, u.OutputTokens, u.TotalTokens,
 		u.LatencyMs, u.Status,
 	)
+}
+
+type TestResult struct {
+	ID              uint   `gorm:"primaryKey"`
+	ProviderID      uint   `gorm:"index"`
+	ProviderModelID uint   `gorm:"index;default:0"`
+	ModelID         string `gorm:"index"`
+	Protocol        string `gorm:"index"`
+	Success         bool
+	CallMethod      string
+	LatencyMs       int64
+	InputTokens     int
+	OutputTokens    int
+	Response        string    `gorm:"type:text"`
+	Error           string    `gorm:"type:text"`
+	CreatedAt       time.Time `gorm:"index"`
+}
+
+func (TestResult) TableName() string {
+	return "test_results"
 }
 
 type MCPLog struct {
@@ -386,6 +423,10 @@ func InitDB(
 		return err
 	}
 
+	if err := migrateKeyFormats(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -401,13 +442,39 @@ func autoMigrate() error {
 		&MCPResource{},
 		&MCPPrompt{},
 		&Key{},
+		&KeyFormat{},
 		&KeyModel{},
 		&KeyMCPTool{},
 		&KeyMCPResource{},
 		&KeyMCPPrompt{},
 		&ModelLog{},
+		&TestResult{},
 		&MCPLog{},
 	)
+}
+
+func migrateKeyFormats() error {
+	var keys []Key
+	if err := DB.Find(&keys).Error; err != nil {
+		return err
+	}
+	for _, k := range keys {
+		var count int64
+		DB.Model(&KeyFormat{}).Where("key_id = ?", k.ID).Count(&count)
+		if count == 0 && k.Key != "" {
+			kf := KeyFormat{
+				KeyID:        k.ID,
+				Format:       "openai",
+				FormattedKey: k.Key,
+			}
+			if err := DB.Create(&kf).Error; err != nil {
+				log.Printf("[Database] Failed to migrate key format for key ID %d: %v", k.ID, err)
+				return err
+			}
+			log.Printf("[Database] Migrated key ID %d Key column to openai format", k.ID)
+		}
+	}
+	return nil
 }
 
 func GetDB() *gorm.DB {

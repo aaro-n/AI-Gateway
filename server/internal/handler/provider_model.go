@@ -2,11 +2,13 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"ai-gateway/internal/model"
 	providerPkg "ai-gateway/internal/provider"
@@ -25,6 +27,21 @@ type createProviderModelRequest struct {
 	SupportsVision bool    `json:"supports_vision"`
 	SupportsTools  bool    `json:"supports_tools"`
 	SupportsStream bool    `json:"supports_stream"`
+	Source         string  `json:"source"`
+}
+
+// updateProviderModelRequest 使用指针类型，前端可只传需要更新的字段，零值不会被误覆盖
+type updateProviderModelRequest struct {
+	ModelID        *string  `json:"model_id"`
+	DisplayName    *string  `json:"display_name"`
+	OwnedBy        *string  `json:"owned_by"`
+	ContextWindow  *int     `json:"context_window"`
+	MaxOutput      *int     `json:"max_output"`
+	InputPrice     *float64 `json:"input_price"`
+	OutputPrice    *float64 `json:"output_price"`
+	SupportsVision *bool    `json:"supports_vision"`
+	SupportsTools  *bool    `json:"supports_tools"`
+	SupportsStream *bool    `json:"supports_stream"`
 }
 
 type providerModelResponse struct {
@@ -109,6 +126,10 @@ func (h *ProviderModelHandler) Create(c *gin.Context) {
 		return
 	}
 
+	source := req.Source
+	if source == "" {
+		source = "manual"
+	}
 	pm := model.ProviderModel{
 		ProviderID:     uint(providerID),
 		ModelID:        req.ModelID,
@@ -122,7 +143,7 @@ func (h *ProviderModelHandler) Create(c *gin.Context) {
 		SupportsTools:  req.SupportsTools,
 		SupportsStream: req.SupportsStream,
 		IsAvailable:    true,
-		Source:         "manual",
+		Source:         source,
 	}
 
 	if err := model.DB.Create(&pm).Error; err != nil {
@@ -152,38 +173,64 @@ func (h *ProviderModelHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var req createProviderModelRequest
+	var req updateProviderModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	updates := map[string]interface{}{
-		"display_name":    req.DisplayName,
-		"context_window":  req.ContextWindow,
-		"max_output":      req.MaxOutput,
-		"input_price":     req.InputPrice,
-		"output_price":    req.OutputPrice,
-		"supports_vision": req.SupportsVision,
-		"supports_tools":  req.SupportsTools,
-		"supports_stream": req.SupportsStream,
+	updates := map[string]interface{}{}
+	if req.DisplayName != nil {
+		updates["display_name"] = *req.DisplayName
+	}
+	if req.OwnedBy != nil {
+		updates["owned_by"] = *req.OwnedBy
+	}
+	if req.ContextWindow != nil {
+		updates["context_window"] = *req.ContextWindow
+	}
+	if req.MaxOutput != nil {
+		updates["max_output"] = *req.MaxOutput
+	}
+	if req.InputPrice != nil {
+		updates["input_price"] = *req.InputPrice
+	}
+	if req.OutputPrice != nil {
+		updates["output_price"] = *req.OutputPrice
+	}
+	if req.SupportsVision != nil {
+		updates["supports_vision"] = *req.SupportsVision
+	}
+	if req.SupportsTools != nil {
+		updates["supports_tools"] = *req.SupportsTools
+	}
+	if req.SupportsStream != nil {
+		updates["supports_stream"] = *req.SupportsStream
 	}
 
-	if req.ModelID != "" && req.ModelID != pm.ModelID {
+	if req.ModelID != nil && *req.ModelID != "" && *req.ModelID != pm.ModelID {
 		var existing model.ProviderModel
-		if err := model.DB.Where("provider_id = ? AND model_id = ? AND id != ?", providerID, req.ModelID, pm.ID).First(&existing).Error; err == nil {
+		if err := model.DB.Where("provider_id = ? AND model_id = ? AND id != ?", providerID, *req.ModelID, pm.ID).First(&existing).Error; err == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "model_id already exists"})
 			return
 		}
-		updates["model_id"] = req.ModelID
+		updates["model_id"] = *req.ModelID
 	}
 
-	if err := model.DB.Model(&pm).Updates(updates).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if len(updates) == 0 {
+		c.JSON(http.StatusOK, gin.H{"model": toProviderModelResponse(pm)})
 		return
 	}
 
-	model.DB.First(&pm, pm.ID)
+	if err := model.DB.Model(&pm).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update model"})
+		return
+	}
+
+	if err := model.DB.First(&pm, pm.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read updated model"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"model": toProviderModelResponse(pm)})
 }
 
@@ -206,15 +253,18 @@ func (h *ProviderModelHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 硬删除关联的 ModelMapping
-	if err := model.DB.Where("provider_model_id = ?", pm.ID).Delete(&model.ModelMapping{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 硬删除 ProviderModel
-	if err := model.DB.Delete(&pm).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// 使用事务确保数据一致性
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("provider_model_id = ?", pm.ID).Delete(&model.ModelMapping{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&pm).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete model"})
 		return
 	}
 
@@ -237,6 +287,7 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 	providerImpl := providerPkg.NewAutomatedProvider(
 		provider.OpenAIBaseURL,
 		provider.AnthropicBaseURL,
+		provider.GeminiBaseURL,
 		provider.APIKey,
 	)
 	models, err := providerImpl.SyncModels(provider.ID)
@@ -247,13 +298,18 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 
 	added := 0
 	updated := 0
+	syncedModelIDs := make([]string, 0, len(models))
 
 	for _, pm := range models {
+		syncedModelIDs = append(syncedModelIDs, pm.ModelID)
 		var existing model.ProviderModel
 		res := model.DB.Where("provider_id = ? AND model_id = ?", provider.ID, pm.ModelID).First(&existing)
 
 		if res.Error != nil {
-			model.DB.Create(&pm)
+			if err := model.DB.Create(&pm).Error; err != nil {
+				log.Printf("[Sync] Failed to create model %s: %v", pm.ModelID, err)
+				continue
+			}
 			added++
 		} else if existing.Source != "manual" {
 			model.DB.Model(&existing).Updates(map[string]interface{}{
@@ -269,13 +325,27 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 		}
 	}
 
+	// Disable provider models that are NO LONGER returned during sync, but only if they were added via sync
+	var deactivatedCount int64 = 0
+	if len(syncedModelIDs) > 0 {
+		var deactivatedModels []model.ProviderModel
+		model.DB.Where("provider_id = ? AND source = ? AND model_id NOT IN ? AND is_available = ?", provider.ID, "sync", syncedModelIDs, true).Find(&deactivatedModels)
+		deactivatedCount = int64(len(deactivatedModels))
+		if deactivatedCount > 0 {
+			model.DB.Model(&model.ProviderModel{}).Where("provider_id = ? AND source = ? AND model_id NOT IN ?", provider.ID, "sync", syncedModelIDs).Updates(map[string]interface{}{
+				"is_available": false,
+			})
+		}
+	}
+
 	now := time.Now()
 	model.DB.Model(&provider).Update("last_sync_at", &now)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("%s models synced", provider.Name),
-		"added":   added,
-		"updated": updated,
-		"total":   len(models),
+		"message":     fmt.Sprintf("%s models synced", provider.Name),
+		"added":       added,
+		"updated":     updated,
+		"deactivated": deactivatedCount,
+		"total":       len(models),
 	})
 }

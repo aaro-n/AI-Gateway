@@ -25,4 +25,6 @@ type Provider interface {
 	SyncModels(providerID uint) ([]model.ProviderModel, error)
 	ExecuteOpenAIRequest(ctx *gin.Context, pm *model.ProviderModel, usage *Usage) error
 	ExecuteAnthropicRequest(ctx *gin.Context, pm *model.ProviderModel, usage *Usage) error
+	ExecuteGeminiRequest(ctx *gin.Context, pm *model.ProviderModel, usage *Usage) error
+	ExecuteRequest(protocol string, ctx *gin.Context, pm *model.ProviderModel, usage *Usage) error
 }

@@ -10,21 +10,24 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/model"
+	providerPkg "ai-gateway/internal/provider"
 )
 
 type KeyHandler struct{}
 
 type createKeyRequest struct {
-	Name      string  `json:"name" binding:"required"`
-	Models    []uint  `json:"models"`
-	ExpiresAt *string `json:"expires_at"`
+	Name       string  `json:"name" binding:"required"`
+	Models     []uint  `json:"models"`
+	ExpiresAt  *string `json:"expires_at"`
+	AccessMode string  `json:"access_mode"` // "mapping", "direct", "hybrid"
 }
 
 type updateKeyRequest struct {
-	Name      *string `json:"name"`
-	Models    []uint  `json:"models"`
-	ExpiresAt *string `json:"expires_at"`
-	Enabled   *bool   `json:"enabled"`
+	Name       *string `json:"name"`
+	Models     []uint  `json:"models"`
+	ExpiresAt  *string `json:"expires_at"`
+	Enabled    *bool   `json:"enabled"`
+	AccessMode *string `json:"access_mode"`
 }
 
 type keyModelResponse struct {
@@ -34,18 +37,21 @@ type keyModelResponse struct {
 }
 
 type keyResponse struct {
-	ID        uint               `json:"id"`
-	Key       string             `json:"key"`
-	Name      string             `json:"name"`
-	Enabled   bool               `json:"enabled"`
-	ExpiresAt *time.Time         `json:"expires_at"`
-	CreatedAt time.Time          `json:"created_at"`
-	Models    []keyModelResponse `json:"models,omitempty"`
+	ID         uint               `json:"id"`
+	Key        string             `json:"key"`
+	Name       string             `json:"name"`
+	Enabled    bool               `json:"enabled"`
+	AccessMode string             `json:"access_mode"`
+	ExpiresAt  *time.Time         `json:"expires_at"`
+	CreatedAt  time.Time          `json:"created_at"`
+	Models     []keyModelResponse `json:"models,omitempty"`
+	Formats    map[string]string  `json:"formats,omitempty"`
 }
 
 type keyCreateResponse struct {
-	Key    keyResponse `json:"key"`
-	RawKey string      `json:"raw_key"`
+	Key     keyResponse       `json:"key"`
+	RawKey  string            `json:"raw_key"`
+	Formats map[string]string `json:"formats,omitempty"`
 }
 
 type keyMCPToolResponse struct {
@@ -83,22 +89,54 @@ func generateKey() string {
 	return "sk-" + hex.EncodeToString(bytes)
 }
 
+func generateKeyFormat(format string) string {
+	desc, ok := providerPkg.GetProtocol(format)
+	if !ok {
+		bytes := make([]byte, 24)
+		rand.Read(bytes)
+		return "sk-" + hex.EncodeToString(bytes)
+	}
+
+	bytes := make([]byte, desc.KeyLength)
+	rand.Read(bytes)
+	return desc.KeyPrefix + desc.KeyEncoder(bytes)
+}
+
+func createFormatsForKey(keyID uint) (map[string]string, error) {
+	formats := make(map[string]string)
+	for name := range providerPkg.AllProtocols() {
+		formattedKey := generateKeyFormat(name)
+		kf := model.KeyFormat{
+			KeyID:        keyID,
+			Format:       name,
+			FormattedKey: formattedKey,
+		}
+		if err := model.DB.Create(&kf).Error; err != nil {
+			return nil, err
+		}
+		formats[name] = formattedKey
+	}
+	return formats, nil
+}
+
 type keyListItemResponse struct {
 	ID                uint               `json:"id"`
 	Key               string             `json:"key"`
 	Name              string             `json:"name"`
 	Enabled           bool               `json:"enabled"`
+	AccessMode        string             `json:"access_mode"`
 	ExpiresAt         *time.Time         `json:"expires_at"`
 	CreatedAt         time.Time          `json:"created_at"`
 	Models            []keyModelResponse `json:"models,omitempty"`
 	MCPToolsCount     int                `json:"mcp_tools_count"`
 	MCPResourcesCount int                `json:"mcp_resources_count"`
 	MCPPromptsCount   int                `json:"mcp_prompts_count"`
+	Formats           map[string]string  `json:"formats,omitempty"`
 }
 
 func (h *KeyHandler) List(c *gin.Context) {
 	var keys []model.Key
-	if err := model.DB.Preload("Models.Model").Find(&keys).Error; err != nil {
+	if err := model.DB.Preload("Models.Model").Preload("Formats").Find(&keys).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -108,6 +146,15 @@ func (h *KeyHandler) List(c *gin.Context) {
 		maskedKey := k.Key
 		if len(maskedKey) > 8 {
 			maskedKey = maskedKey[:8] + "****" + maskedKey[len(maskedKey)-4:]
+		}
+
+		formats := make(map[string]string)
+		for _, f := range k.Formats {
+			masked := f.FormattedKey
+			if len(masked) > 8 {
+				masked = masked[:8] + "****" + masked[len(masked)-4:]
+			}
+			formats[f.Format] = masked
 		}
 
 		models := make([]keyModelResponse, len(k.Models))
@@ -133,12 +180,14 @@ func (h *KeyHandler) List(c *gin.Context) {
 			Key:               maskedKey,
 			Name:              k.Name,
 			Enabled:           k.Enabled,
+			AccessMode:        k.AccessMode,
 			ExpiresAt:         k.ExpiresAt,
 			CreatedAt:         k.CreatedAt,
 			Models:            models,
 			MCPToolsCount:     int(mcpToolsCount),
 			MCPResourcesCount: int(mcpResourcesCount),
 			MCPPromptsCount:   int(mcppromptsCount),
+			Formats:           formats,
 		}
 	}
 
@@ -160,14 +209,26 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		}
 	}
 
+	accessMode := req.AccessMode
+	if accessMode == "" {
+		accessMode = "mapping"
+	}
+
 	key := model.Key{
-		Key:       generateKey(),
-		Name:      req.Name,
-		ExpiresAt: expiresAt,
-		Enabled:   true,
+		Key:        generateKey(),
+		Name:       req.Name,
+		ExpiresAt:  expiresAt,
+		Enabled:    true,
+		AccessMode: accessMode,
 	}
 
 	if err := model.DB.Create(&key).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	formats, err := createFormatsForKey(key.ID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -202,15 +263,18 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"key": keyResponse{
-			ID:        key.ID,
-			Key:       key.Key,
-			Name:      key.Name,
-			Enabled:   key.Enabled,
-			ExpiresAt: key.ExpiresAt,
-			CreatedAt: key.CreatedAt,
-			Models:    models,
+			ID:         key.ID,
+			Key:        key.Key,
+			Name:       key.Name,
+			Enabled:    key.Enabled,
+			AccessMode: key.AccessMode,
+			ExpiresAt:  key.ExpiresAt,
+			CreatedAt:  key.CreatedAt,
+			Models:     models,
+			Formats:    formats,
 		},
 		"raw_key": key.Key,
+		"formats": formats,
 	})
 }
 
@@ -226,6 +290,7 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPTool{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPResource{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPPrompt{})
+	model.DB.Where("key_id = ?", id).Delete(&model.KeyFormat{})
 
 	// 软删除 Key
 	if err := model.DB.Delete(&model.Key{}, id).Error; err != nil {
@@ -267,6 +332,9 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}
+	if req.AccessMode != nil {
+		updates["access_mode"] = *req.AccessMode
+	}
 
 	if len(updates) > 0 {
 		if err := model.DB.Model(&key).Updates(updates).Error; err != nil {
@@ -304,13 +372,14 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"key": keyResponse{
-		ID:        key.ID,
-		Key:       key.Key,
-		Name:      key.Name,
-		Enabled:   key.Enabled,
-		ExpiresAt: key.ExpiresAt,
-		CreatedAt: key.CreatedAt,
-		Models:    models,
+		ID:         key.ID,
+		Key:        key.Key,
+		Name:       key.Name,
+		Enabled:    key.Enabled,
+		AccessMode: key.AccessMode,
+		ExpiresAt:  key.ExpiresAt,
+		CreatedAt:  key.CreatedAt,
+		Models:     models,
 	}})
 }
 
@@ -456,7 +525,7 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	}
 
 	var key model.Key
-	if err := model.DB.First(&key, id).Error; err != nil {
+	if err := model.DB.Preload("Formats").First(&key, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
 		return
 	}
@@ -464,6 +533,15 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	maskedKey := key.Key
 	if len(maskedKey) > 8 {
 		maskedKey = maskedKey[:8] + "****" + maskedKey[len(maskedKey)-4:]
+	}
+
+	formats := make(map[string]string)
+	for _, f := range key.Formats {
+		masked := f.FormattedKey
+		if len(masked) > 8 {
+			masked = masked[:8] + "****" + masked[len(masked)-4:]
+		}
+		formats[f.Format] = masked
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -474,6 +552,7 @@ func (h *KeyHandler) Get(c *gin.Context) {
 			Enabled:   key.Enabled,
 			ExpiresAt: key.ExpiresAt,
 			CreatedAt: key.CreatedAt,
+			Formats:   formats,
 		},
 	})
 }
@@ -498,6 +577,14 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 		return
 	}
 
+	// Delete existing key formats and generate new ones
+	model.DB.Where("key_id = ?", id).Delete(&model.KeyFormat{})
+	formats, err := createFormatsForKey(key.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new key formats: " + err.Error()})
+		return
+	}
+
 	model.DB.Preload("Models.Model").First(&key, id)
 
 	models := make([]keyModelResponse, len(key.Models))
@@ -518,17 +605,29 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 		maskedKey = maskedKey[:8] + "****" + maskedKey[len(maskedKey)-4:]
 	}
 
+	maskedFormats := make(map[string]string)
+	for name, val := range formats {
+		masked := val
+		if len(masked) > 8 {
+			masked = masked[:8] + "****" + masked[len(masked)-4:]
+		}
+		maskedFormats[name] = masked
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
-			ID:        key.ID,
-			Key:       maskedKey,
-			Name:      key.Name,
-			Enabled:   key.Enabled,
-			ExpiresAt: key.ExpiresAt,
-			CreatedAt: key.CreatedAt,
-			Models:    models,
+			ID:         key.ID,
+			Key:        maskedKey,
+			Name:       key.Name,
+			Enabled:    key.Enabled,
+			AccessMode: key.AccessMode,
+			ExpiresAt:  key.ExpiresAt,
+			CreatedAt:  key.CreatedAt,
+			Models:     models,
+			Formats:    maskedFormats,
 		},
 		"raw_key": key.Key,
+		"formats": formats,
 	})
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -51,6 +52,15 @@ type customModelTestRequest struct {
 	ModelID string `json:"model_id" binding:"required"`
 }
 
+type testProviderModelRequest struct {
+	ProviderID       uint   `json:"provider_id"`
+	OpenAIBaseURL    string `json:"openai_base_url"`
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+	GeminiBaseURL    string `json:"gemini_base_url"`
+	APIKey           string `json:"api_key"`
+	ModelID          string `json:"model_id" binding:"required"`
+}
+
 type customModelTestResponse struct {
 	Provider struct {
 		ID   uint   `json:"id"`
@@ -87,7 +97,7 @@ func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult *protocolTestResult
+	var openAIResult, anthropicResult, geminiResult *protocolTestResult
 
 	if p.OpenAIBaseURL != "" {
 		wg.Add(1)
@@ -107,6 +117,15 @@ func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
 		}()
 	}
 
+	if p.GeminiBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(&p, pm, "gemini")
+			geminiResult = &result
+		}()
+	}
+
 	wg.Wait()
 
 	tests := []protocolTestResult{}
@@ -116,6 +135,12 @@ func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
 	if anthropicResult != nil {
 		tests = append(tests, *anthropicResult)
 	}
+	if geminiResult != nil {
+		tests = append(tests, *geminiResult)
+	}
+
+	// 保存测试结果
+	saveTestResults(p.ID, 0, req.ModelID, tests)
 
 	resp := customModelTestResponse{
 		Provider: struct {
@@ -130,6 +155,100 @@ func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
+	var req testProviderModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	p := &model.Provider{
+		OpenAIBaseURL:    strings.TrimSuffix(req.OpenAIBaseURL, "/"),
+		AnthropicBaseURL: strings.TrimSuffix(req.AnthropicBaseURL, "/"),
+		GeminiBaseURL:    strings.TrimSuffix(req.GeminiBaseURL, "/"),
+		APIKey:           req.APIKey,
+	}
+
+	if req.OpenAIBaseURL == "" && req.AnthropicBaseURL == "" && req.GeminiBaseURL == "" && req.APIKey == "DUMMY_KEY_FOR_EDIT" {
+		// This means we are editing an existing provider and didn't change the credentials. Let's do nothing or fallback
+	}
+
+	// If we are editing (APIKey might be masked or DUMMY_KEY_FOR_EDIT), let's find the existing provider and use its APIKey/URLs
+	// Usually, the frontend can pass provider_id if we want. Let's make it robust:
+	// We can check if APIKey is the dummy key, then we can find provider by name or URL, or let's accept provider_id in request.
+	// Let's check testProviderModelRequest below.
+	// For maximum robustness, if APIKey is "DUMMY_KEY_FOR_EDIT" or empty, and we can find a matching provider by BaseURLs, let's load the saved APIKey.
+	if req.APIKey == "DUMMY_KEY_FOR_EDIT" || req.APIKey == "" {
+		var existing model.Provider
+		if req.OpenAIBaseURL != "" {
+			model.DB.Where("openai_base_url = ?", p.OpenAIBaseURL).First(&existing)
+		} else if req.AnthropicBaseURL != "" {
+			model.DB.Where("anthropic_base_url = ?", p.AnthropicBaseURL).First(&existing)
+		} else if req.GeminiBaseURL != "" {
+			model.DB.Where("gemini_base_url = ?", p.GeminiBaseURL).First(&existing)
+		}
+		if existing.ID > 0 {
+			p.APIKey = existing.APIKey
+		}
+	}
+
+	pm := &model.ProviderModel{
+		ModelID: req.ModelID,
+	}
+
+	var wg sync.WaitGroup
+	var openAIResult, anthropicResult, geminiResult *protocolTestResult
+
+	if p.OpenAIBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(p, pm, "openai")
+			openAIResult = &result
+		}()
+	}
+
+	if p.AnthropicBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(p, pm, "anthropic")
+			anthropicResult = &result
+		}()
+	}
+
+	if p.GeminiBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(p, pm, "gemini")
+			geminiResult = &result
+		}()
+	}
+
+	wg.Wait()
+
+	tests := []protocolTestResult{}
+	if openAIResult != nil {
+		tests = append(tests, *openAIResult)
+	}
+	if anthropicResult != nil {
+		tests = append(tests, *anthropicResult)
+	}
+	if geminiResult != nil {
+		tests = append(tests, *geminiResult)
+	}
+
+	// 保存测试结果（ProviderID 可能为 0，表示未保存的 provider）
+	providerID := req.ProviderID
+	saveTestResults(providerID, 0, req.ModelID, tests)
+
+	c.JSON(http.StatusOK, gin.H{
+		"model_id": req.ModelID,
+		"tests":    tests,
+	})
 }
 
 func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
@@ -158,7 +277,7 @@ func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult *protocolTestResult
+	var openAIResult, anthropicResult, geminiResult *protocolTestResult
 
 	if p.OpenAIBaseURL != "" {
 		wg.Add(1)
@@ -178,6 +297,15 @@ func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
 		}()
 	}
 
+	if p.GeminiBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(&p, &pm, "gemini")
+			geminiResult = &result
+		}()
+	}
+
 	wg.Wait()
 
 	tests := []protocolTestResult{}
@@ -187,6 +315,12 @@ func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
 	if anthropicResult != nil {
 		tests = append(tests, *anthropicResult)
 	}
+	if geminiResult != nil {
+		tests = append(tests, *geminiResult)
+	}
+
+	// 保存测试结果并更新 is_available
+	saveTestResults(p.ID, pm.ID, pm.ModelID, tests)
 
 	resp := providerModelTestResponse{
 		Provider: struct {
@@ -216,6 +350,7 @@ type providerBasicInfo struct {
 	Name             string `json:"name"`
 	OpenAIBaseURL    string `json:"openai_base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
+	GeminiBaseURL    string `json:"gemini_base_url"`
 	Enabled          bool   `json:"enabled"`
 }
 
@@ -286,6 +421,11 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 				protocolTests = append(protocolTests, result)
 			}
 
+			if j.mapping.Provider.GeminiBaseURL != "" {
+				result := executeTest(j.mapping.Provider, j.pm, "gemini")
+				protocolTests = append(protocolTests, result)
+			}
+
 			results[idx] = mappingTestResult{
 				MappingID: j.mapping.ID,
 				Weight:    j.mapping.Weight,
@@ -294,6 +434,7 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 					Name:             j.mapping.Provider.Name,
 					OpenAIBaseURL:    j.mapping.Provider.OpenAIBaseURL,
 					AnthropicBaseURL: j.mapping.Provider.AnthropicBaseURL,
+					GeminiBaseURL:    j.mapping.Provider.GeminiBaseURL,
 					Enabled:          j.mapping.Provider.Enabled,
 				},
 				ProviderModel: modelBasicInfo{
@@ -302,6 +443,9 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 				},
 				ProtocolTests: protocolTests,
 			}
+
+			// 保存测试结果并更新 is_available
+			saveTestResults(j.mapping.Provider.ID, j.pm.ID, j.pm.ModelID, protocolTests)
 		}(i, job)
 	}
 
@@ -314,13 +458,30 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 }
 
 func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) protocolTestResult {
-	body := map[string]interface{}{
-		"model":      pm.ModelID,
-		"messages":   []map[string]string{{"role": "user", "content": "简短介绍一下自己。"}},
-		"max_tokens": 100,
-		"stream":     false,
+	var bodyBytes []byte
+	if protocol == "gemini" {
+		body := map[string]interface{}{
+			"contents": []map[string]interface{}{
+				{
+					"parts": []map[string]interface{}{
+						{"text": "ping"},
+					},
+				},
+			},
+			"generationConfig": map[string]interface{}{
+				"maxOutputTokens": 1,
+			},
+		}
+		bodyBytes, _ = json.Marshal(body)
+	} else {
+		body := map[string]interface{}{
+			"model":      pm.ModelID,
+			"messages":   []map[string]string{{"role": "user", "content": "简短介绍一下自己。"}},
+			"max_tokens": 1, // 只生成1个token，最小化测试成本
+			"stream":     false,
+		}
+		bodyBytes, _ = json.Marshal(body)
 	}
-	bodyBytes, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
 	testCtx, _ := gin.CreateTestContext(w)
@@ -330,6 +491,7 @@ func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) pr
 	providerImpl := provider.NewAutomatedProvider(
 		p.OpenAIBaseURL,
 		p.AnthropicBaseURL,
+		p.GeminiBaseURL,
 		p.APIKey,
 	)
 	usage := &provider.Usage{}
@@ -347,11 +509,16 @@ func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) pr
 			callMethod = "convert"
 		}
 		err = providerImpl.ExecuteOpenAIRequest(testCtx, pm, usage)
-	} else {
+	} else if protocol == "anthropic" {
 		if p.AnthropicBaseURL == "" {
 			callMethod = "convert"
 		}
 		err = providerImpl.ExecuteAnthropicRequest(testCtx, pm, usage)
+	} else if protocol == "gemini" {
+		if p.GeminiBaseURL == "" {
+			callMethod = "convert"
+		}
+		err = providerImpl.ExecuteGeminiRequest(testCtx, pm, usage)
 	}
 
 	latencyMs := time.Since(start).Milliseconds()
@@ -365,19 +532,22 @@ func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) pr
 	if err != nil {
 		errorMsg = err.Error()
 	} else if w.Code != 200 {
-		var errResp struct {
+		var errObj struct {
 			Error struct {
 				Message string `json:"message"`
 			} `json:"error"`
-			ErrorMsg string `json:"error"`
 		}
-		json.Unmarshal(respBody, &errResp)
-		if errResp.Error.Message != "" {
-			errorMsg = errResp.Error.Message
-		} else if errResp.ErrorMsg != "" {
-			errorMsg = errResp.ErrorMsg
+		if err := json.Unmarshal(respBody, &errObj); err == nil && errObj.Error.Message != "" {
+			errorMsg = errObj.Error.Message
 		} else {
-			errorMsg = "HTTP " + strconv.Itoa(w.Code)
+			var errStr struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(respBody, &errStr); err == nil && errStr.Error != "" {
+				errorMsg = errStr.Error
+			} else {
+				errorMsg = "HTTP " + strconv.Itoa(w.Code)
+			}
 		}
 	}
 
@@ -412,7 +582,7 @@ func extractResponseContent(body []byte, protocol string) string {
 		if len(resp.Choices) > 0 {
 			return strings.TrimSpace(resp.Choices[0].Message.Content)
 		}
-	} else {
+	} else if protocol == "anthropic" {
 		var resp struct {
 			Content []struct {
 				Type string `json:"type"`
@@ -427,7 +597,103 @@ func extractResponseContent(body []byte, protocol string) string {
 				return strings.TrimSpace(c.Text)
 			}
 		}
+	} else if protocol == "gemini" {
+		var resp struct {
+			Candidates []struct {
+				Content struct {
+					Parts []struct {
+						Text string `json:"text"`
+					} `json:"parts"`
+				} `json:"content"`
+			} `json:"candidates"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return ""
+		}
+		if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+			return strings.TrimSpace(resp.Candidates[0].Content.Parts[0].Text)
+		}
 	}
 
 	return ""
+}
+
+// saveTestResults 保存测试结果到数据库，并更新 ProviderModel 的可用状态
+func saveTestResults(providerID uint, providerModelID uint, modelID string, tests []protocolTestResult) {
+	// 只保存有 providerID 的测试结果，避免 provider_id=0 污染查询
+	if providerID == 0 {
+		return
+	}
+	for _, t := range tests {
+		tr := model.TestResult{
+			ProviderID:      providerID,
+			ProviderModelID: providerModelID,
+			ModelID:         modelID,
+			Protocol:        t.Protocol,
+			Success:         t.Success,
+			CallMethod:      t.CallMethod,
+			LatencyMs:       t.LatencyMs,
+			InputTokens:     t.InputTokens,
+			OutputTokens:    t.OutputTokens,
+			Response:        t.Response,
+			Error:           t.Error,
+		}
+		if err := model.DB.Create(&tr).Error; err != nil {
+			log.Printf("[TestResult] Failed to save test result: %v", err)
+		}
+	}
+
+	// 如果是已保存的 provider model，更新 is_available 状态
+	if providerModelID > 0 {
+		allOk := len(tests) > 0
+		for _, t := range tests {
+			if !t.Success {
+				allOk = false
+				break
+			}
+		}
+		if err := model.DB.Model(&model.ProviderModel{}).Where("id = ?", providerModelID).Update("is_available", allOk).Error; err != nil {
+			log.Printf("[TestResult] Failed to update is_available: %v", err)
+		}
+	}
+}
+
+// getTestResultsResponse 某个模型的最近一次测试结果
+type modelTestResultSummary struct {
+	ModelID string `json:"model_id"`
+	Success bool   `json:"success"`
+	Latency int64  `gorm:"column:latency_ms" json:"latency_ms"`
+	Error   string `json:"error"`
+}
+
+// GetTestResults 获取指定渠道所有模型的最近一次测试结果
+func (h *ModelTestHandler) GetTestResults(c *gin.Context) {
+	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		return
+	}
+
+	// 获取该渠道下所有 provider_models 的 model_id
+	var modelIDs []string
+	model.DB.Model(&model.ProviderModel{}).Where("provider_id = ?", providerID).Pluck("model_id", &modelIDs)
+
+	var results []modelTestResultSummary
+	for _, mid := range modelIDs {
+		var latest model.TestResult
+		err := model.DB.Where("(provider_id = ? OR provider_id = 0) AND model_id = ?", providerID, mid).
+			Order("created_at DESC").
+			First(&latest).Error
+		if err != nil {
+			continue
+		}
+		results = append(results, modelTestResultSummary{
+			ModelID: latest.ModelID,
+			Success: latest.Success,
+			Latency: latest.LatencyMs,
+			Error:   latest.Error,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": results})
 }

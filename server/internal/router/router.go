@@ -55,6 +55,7 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 		providerImpl := provider.NewAutomatedProvider(
 			providerInfo.OpenAIBaseURL,
 			providerInfo.AnthropicBaseURL,
+			providerInfo.GeminiBaseURL,
 			providerInfo.APIKey,
 		)
 		result := RouteResult{
@@ -78,6 +79,59 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 		if earliest != nil {
 			return earliest, nil
 		}
+		return &allProviders[0], nil
+	}
+
+	return nil, nil
+}
+
+func (r *ModelRouter) RouteDirect(modelID string) (*RouteResult, error) {
+	r.cooldownManager.ClearExpiredCooldowns()
+
+	var pms []model.ProviderModel
+	if err := model.DB.Preload("Provider").
+		Where("model_id = ? AND is_available = ?", modelID, true).
+		Find(&pms).Error; err != nil {
+		return nil, err
+	}
+
+	if len(pms) == 0 {
+		return nil, nil
+	}
+
+	var allProviders []RouteResult
+	var availableProviders []RouteResult
+
+	for _, pm := range pms {
+		providerInfo := pm.Provider
+		if providerInfo == nil || !providerInfo.Enabled {
+			continue
+		}
+
+		pmCopy := pm
+		providerImpl := provider.NewAutomatedProvider(
+			providerInfo.OpenAIBaseURL,
+			providerInfo.AnthropicBaseURL,
+			providerInfo.GeminiBaseURL,
+			providerInfo.APIKey,
+		)
+		result := RouteResult{
+			Provider:         providerInfo,
+			ProviderModel:    &pmCopy,
+			ProviderInstance: providerImpl,
+		}
+		allProviders = append(allProviders, result)
+
+		if !r.cooldownManager.IsCooldown(providerInfo.ID, pm.ID) {
+			availableProviders = append(availableProviders, result)
+		}
+	}
+
+	if len(availableProviders) > 0 {
+		return &availableProviders[0], nil
+	}
+
+	if len(allProviders) > 0 {
 		return &allProviders[0], nil
 	}
 
