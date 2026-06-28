@@ -264,7 +264,9 @@ export default {
     detailView: '单协议详情',
     capabilityList: '能力列表',
     description: '描述',
-    errorHint: '对比数据加载失败，请稍后重试'
+    errorHint: '对比数据加载失败，请稍后重试',
+    sameProtoDesc: '说明',
+    sameProtoHint: '{name} 协议直通，客户端与后端使用相同协议，所有原生能力均可正常使用，无功能损失。'
   },
   mcpUsage: {
     stats: '统计',

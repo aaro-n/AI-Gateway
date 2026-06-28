@@ -56,7 +56,7 @@
         <div v-if="compareResult" class="compare-result">
           <el-alert
             :title="compareResult.summary"
-            :type="compareResult.losses && compareResult.losses.length > 0 ? 'warning' : 'success'"
+            :type="isSameProtocol ? 'success' : (compareResult.losses && compareResult.losses.length > 0 ? 'warning' : 'success')"
             :closable="false"
             show-icon
             style="margin-bottom: 16px"
@@ -74,7 +74,11 @@
             <el-table-column prop="note" :label="t('protocolCompare.note')" min-width="400" />
           </el-table>
 
-          <el-empty v-else :description="t('protocolCompare.noLoss')" />
+          <el-descriptions v-else-if="isSameProtocol" :column="1" border>
+            <el-descriptions-item :label="t('protocolCompare.sameProtoDesc')">
+              {{ t('protocolCompare.sameProtoHint', { name: compareResult.from_label }) }}
+            </el-descriptions-item>
+          </el-descriptions>
         </div>
       </el-card>
 
@@ -156,6 +160,9 @@ const categoryLabels: Record<string, string> = {
   input: '输入控制',
   advanced: '高级功能'
 }
+
+// 是否选择了相同协议
+const isSameProtocol = computed(() => fromProtocol.value === toProtocol.value)
 
 // 构建能力对比表数据
 const capabilityTable = computed(() => {

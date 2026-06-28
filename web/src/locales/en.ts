@@ -264,6 +264,8 @@ export default {
     detailView: 'Protocol Detail',
     capabilityList: 'Capability List',
     description: 'Description',
-    errorHint: 'Comparison data failed to load, please retry later'
+    errorHint: 'Comparison data failed to load, please retry later',
+    sameProtoDesc: 'Info',
+    sameProtoHint: 'Direct {name} protocol passthrough — client and backend use the same protocol, all native capabilities are fully available with no feature loss.'
   }
 }
