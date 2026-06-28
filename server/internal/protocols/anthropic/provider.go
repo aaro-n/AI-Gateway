@@ -437,11 +437,18 @@ func (p *AnthropicProvider) parseAnthropicResponse(body []byte) (*unified.Respon
 	}
 
 	var textContent string
+	var reasoningContent string
 	var toolCalls []unified.ToolCall
 	for _, c := range raw.Content {
 		switch c.Type {
 		case "text":
 			textContent += c.Text
+		case "thinking":
+			if c.Text != "" {
+				reasoningContent += c.Text
+			} else if c.Name == "thinking" && len(c.Input) > 0 {
+				reasoningContent += string(c.Input)
+			}
 		case "tool_use":
 			args, _ := json.Marshal(c.Input)
 			toolCalls = append(toolCalls, unified.ToolCall{
@@ -455,6 +462,7 @@ func (p *AnthropicProvider) parseAnthropicResponse(body []byte) (*unified.Respon
 		}
 	}
 	uresp.Content = textContent
+	uresp.ReasoningContent = reasoningContent
 	uresp.ToolCalls = toolCalls
 
 	switch raw.StopReason {
@@ -517,15 +525,34 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 			case "content_block_delta":
 				if len(event.Delta) > 0 {
 					var delta struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
+						Type        string `json:"type"`
+						Text        string `json:"text"`
+						Thinking    string `json:"thinking"`
+						PartialJSON string `json:"partial_json"`
 					}
-					if json.Unmarshal(event.Delta, &delta) == nil && delta.Type == "text_delta" {
-						ch <- unified.StreamEvent{
-							Type: unified.EventChunk,
-							Delta: &unified.Delta{
-								Content: delta.Text,
-							},
+					if json.Unmarshal(event.Delta, &delta) == nil {
+						switch delta.Type {
+						case "text_delta":
+							ch <- unified.StreamEvent{
+								Type: unified.EventChunk,
+								Delta: &unified.Delta{
+									Content: delta.Text,
+								},
+							}
+						case "thinking_delta":
+							ch <- unified.StreamEvent{
+								Type: unified.EventChunk,
+								Delta: &unified.Delta{
+									ReasoningContent: delta.Thinking,
+								},
+							}
+						case "input_json_delta":
+							ch <- unified.StreamEvent{
+								Type: unified.EventChunk,
+								Delta: &unified.Delta{
+									InputJSON: delta.PartialJSON,
+								},
+							}
 						}
 					}
 				}
@@ -619,40 +646,54 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	// message_start
-	startEvent := map[string]interface{}{
-		"type": "message_start",
-		"message": map[string]interface{}{
-			"id":          "msg_unified",
-			"type":        "message",
-			"role":        "assistant",
-			"model":       "",
-			"content":     []interface{}{},
-			"stop_reason": nil,
-			"usage": map[string]interface{}{
-				"input_tokens":  0,
-				"output_tokens": 0,
-			},
-		},
+	var inputTokens, outputTokens int
+	var blockIndex int
+	var blockActive bool
+	var currentBlockType string // "text" or "thinking"
+
+	ensureBlockStart := func(blockType string) {
+		if blockActive && currentBlockType == blockType {
+			return
+		}
+		if blockActive {
+			// 关闭当前 block
+			p.writeSSE(c, map[string]interface{}{
+				"type":  "content_block_stop",
+				"index": blockIndex,
+			})
+			blockIndex++
+		}
+		p.writeSSE(c, map[string]interface{}{
+			"type":          "content_block_start",
+			"index":         blockIndex,
+			"content_block": map[string]interface{}{"type": blockType, blockType: ""},
+		})
+		blockActive = true
+		currentBlockType = blockType
 	}
-	p.writeSSE(c, startEvent)
 
-	// content_block_start
-	p.writeSSE(c, map[string]interface{}{
-		"type":          "content_block_start",
-		"index":         0,
-		"content_block": map[string]interface{}{"type": "text", "text": ""},
-	})
-
-	var outputTokens int
-	var inputTokens int
 	for ev := range events {
 		switch ev.Type {
 		case unified.EventChunk:
-			if ev.Delta != nil && ev.Delta.Content != "" {
+			if ev.Delta == nil {
+				continue
+			}
+			if ev.Delta.ReasoningContent != "" {
+				ensureBlockStart("thinking")
 				p.writeSSE(c, map[string]interface{}{
 					"type":  "content_block_delta",
-					"index": 0,
+					"index": blockIndex,
+					"delta": map[string]interface{}{
+						"type":     "thinking_delta",
+						"thinking": ev.Delta.ReasoningContent,
+					},
+				})
+			}
+			if ev.Delta.Content != "" {
+				ensureBlockStart("text")
+				p.writeSSE(c, map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": blockIndex,
 					"delta": map[string]interface{}{
 						"type": "text_delta",
 						"text": ev.Delta.Content,
@@ -665,18 +706,24 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 				outputTokens = ev.Usage.OutputTokens
 			}
 		case unified.EventDone:
-			// content_block_stop
-			p.writeSSE(c, map[string]interface{}{
-				"type":  "content_block_stop",
-				"index": 0,
-			})
-			// message_delta
+			// 关闭当前 block
+			if blockActive {
+				p.writeSSE(c, map[string]interface{}{
+					"type":  "content_block_stop",
+					"index": blockIndex,
+				})
+				blockIndex++
+				blockActive = false
+			}
+			// message_delta with stop_reason + usage
 			stopReason := "end_turn"
 			switch ev.FinishReason {
 			case "length":
 				stopReason = "max_tokens"
 			case "tool_calls":
 				stopReason = "tool_use"
+			case "stop_sequence":
+				stopReason = "stop_sequence"
 			}
 			p.writeSSE(c, map[string]interface{}{
 				"type":  "message_delta",

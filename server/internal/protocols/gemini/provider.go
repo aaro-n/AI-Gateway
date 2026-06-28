@@ -106,7 +106,8 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
 			StopSequences   []string `json:"stopSequences,omitempty"`
 		} `json:"generationConfig,omitempty"`
-		Tools json.RawMessage `json:"tools,omitempty"`
+		Tools      json.RawMessage `json:"tools,omitempty"`
+		ToolConfig json.RawMessage `json:"toolConfig,omitempty"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("parse gemini body: %w", err)
@@ -171,6 +172,34 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 	}
 	if raw.GenerationConfig.MaxOutputTokens != nil {
 		req.MaxTokens = *raw.GenerationConfig.MaxOutputTokens
+	}
+	// 转换 Gemini tools → unified Tools
+	if len(raw.Tools) > 0 {
+		var geminiTools []struct {
+			FunctionDeclarations []struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description,omitempty"`
+				Parameters  json.RawMessage `json:"parameters,omitempty"`
+			} `json:"functionDeclarations"`
+		}
+		if json.Unmarshal(raw.Tools, &geminiTools) == nil {
+			for _, gt := range geminiTools {
+				for _, fd := range gt.FunctionDeclarations {
+					req.Tools = append(req.Tools, unified.Tool{
+						Type: "function",
+						Function: unified.FunctionDef{
+							Name:        fd.Name,
+							Description: fd.Description,
+							Parameters:  fd.Parameters,
+						},
+					})
+				}
+			}
+		}
+	}
+	// 转换 Gemini toolConfig → unified ToolChoice (raw JSON pass-through)
+	if len(raw.ToolConfig) > 0 {
+		req.ToolChoice = raw.ToolConfig
 	}
 	return req, nil
 }
@@ -263,8 +292,6 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 	}
 	if req.MaxTokens > 0 {
 		genConfig["maxOutputTokens"] = req.MaxTokens
-	} else {
-		genConfig["maxOutputTokens"] = 4096
 	}
 	if len(req.Stop) > 0 {
 		genConfig["stopSequences"] = req.Stop
@@ -282,6 +309,31 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 		}
 		result["tools"] = []map[string]interface{}{
 			{"functionDeclarations": functionDeclarations},
+		}
+	}
+	// 转换 ToolChoice → Gemini toolConfig
+	if len(req.ToolChoice) > 0 {
+		tc := string(req.ToolChoice)
+		// 尝试识别常见值
+		var mode string
+		switch tc {
+		case `"none"`, "none":
+			mode = "NONE"
+		case `"auto"`, "auto":
+			mode = "AUTO"
+		case `"required"`, "required":
+			mode = "ANY"
+		default:
+			// 可能是 Gemini 原生的 toolConfig JSON，直接透传
+			var tcMap map[string]interface{}
+			if json.Unmarshal(req.ToolChoice, &tcMap) == nil {
+				result["toolConfig"] = tcMap
+			}
+		}
+		if mode != "" {
+			result["toolConfig"] = map[string]interface{}{
+				"functionCallingConfig": map[string]interface{}{"mode": mode},
+			}
 		}
 	}
 	return result

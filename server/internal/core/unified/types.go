@@ -104,12 +104,13 @@ type ImageSource struct {
 
 // Response 统一响应中间表示（非流式）
 type Response struct {
-	ID           string     `json:"id"`
-	Model        string     `json:"model"`
-	Content      string     `json:"content"` // 文本内容合并
-	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
-	FinishReason string     `json:"finish_reason"` // stop/length/tool_calls
-	Usage        Usage      `json:"usage"`
+	ID               string     `json:"id"`
+	Model            string     `json:"model"`
+	Content          string     `json:"content"`                     // 文本内容合并
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // o1/Claude 思考链
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	FinishReason     string     `json:"finish_reason"` // stop/length/tool_calls
+	Usage            Usage      `json:"usage"`
 }
 
 // Usage 统一用量
@@ -147,7 +148,9 @@ const (
 
 // Delta 增量内容
 type Delta struct {
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Role      string     `json:"role,omitempty"`
+	Content          string     `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"` // o1/Claude 思考链增量
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	InputJSON        string     `json:"input_json,omitempty"` // Anthropic input_json_delta 工具参数增量
+	Role             string     `json:"role,omitempty"`
 }

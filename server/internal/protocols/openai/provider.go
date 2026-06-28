@@ -305,6 +305,9 @@ func (p *OpenAIProvider) FormatUnified(resp *unified.Response, events <-chan uni
 				if ev.Delta.Content != "" {
 					deltaMap["content"] = ev.Delta.Content
 				}
+				if ev.Delta.ReasoningContent != "" {
+					deltaMap["reasoning_content"] = ev.Delta.ReasoningContent
+				}
 				if len(ev.Delta.ToolCalls) > 0 {
 					deltaMap["tool_calls"] = ev.Delta.ToolCalls
 				}
@@ -355,6 +358,9 @@ func (p *OpenAIProvider) buildOpenAIMessage(resp *unified.Response) map[string]i
 	if resp.Content != "" {
 		msg["content"] = resp.Content
 	}
+	if resp.ReasoningContent != "" {
+		msg["reasoning_content"] = resp.ReasoningContent
+	}
 	if len(resp.ToolCalls) > 0 {
 		msg["tool_calls"] = resp.ToolCalls
 	}
@@ -379,9 +385,10 @@ func (p *OpenAIProvider) parseOpenAIResponse(body []byte) (*unified.Response, er
 		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
-				Role      string             `json:"role"`
-				Content   string             `json:"content"`
-				ToolCalls []unified.ToolCall `json:"tool_calls"`
+				Role             string             `json:"role"`
+				Content          string             `json:"content"`
+				ReasoningContent string             `json:"reasoning_content"`
+				ToolCalls        []unified.ToolCall `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -402,6 +409,7 @@ func (p *OpenAIProvider) parseOpenAIResponse(body []byte) (*unified.Response, er
 	}
 	if len(raw.Choices) > 0 {
 		uresp.Content = raw.Choices[0].Message.Content
+		uresp.ReasoningContent = raw.Choices[0].Message.ReasoningContent
 		uresp.ToolCalls = raw.Choices[0].Message.ToolCalls
 		uresp.FinishReason = raw.Choices[0].FinishReason
 	}
@@ -438,9 +446,10 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 			var chunk struct {
 				Choices []struct {
 					Delta struct {
-						Role      string             `json:"role"`
-						Content   string             `json:"content"`
-						ToolCalls []unified.ToolCall `json:"tool_calls"`
+						Role             string             `json:"role"`
+						Content          string             `json:"content"`
+						ReasoningContent string             `json:"reasoning_content"`
+						ToolCalls        []unified.ToolCall `json:"tool_calls"`
 					} `json:"delta"`
 					FinishReason string `json:"finish_reason"`
 				} `json:"choices"`
@@ -461,13 +470,14 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 			}
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
-				if delta.Content != "" || len(delta.ToolCalls) > 0 || delta.Role != "" {
+				if delta.Content != "" || len(delta.ToolCalls) > 0 || delta.Role != "" || delta.ReasoningContent != "" {
 					ch <- unified.StreamEvent{
 						Type: unified.EventChunk,
 						Delta: &unified.Delta{
-							Role:      delta.Role,
-							Content:   delta.Content,
-							ToolCalls: delta.ToolCalls,
+							Role:             delta.Role,
+							Content:          delta.Content,
+							ReasoningContent: delta.ReasoningContent,
+							ToolCalls:        delta.ToolCalls,
 						},
 					}
 				}
