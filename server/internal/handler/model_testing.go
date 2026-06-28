@@ -1,22 +1,17 @@
 package handler
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/provider"
+	protocolsPkg "ai-gateway/internal/protocols"
 )
 
 type ModelTestHandler struct{}
@@ -458,108 +453,24 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 }
 
 func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) protocolTestResult {
-	var bodyBytes []byte
-	if protocol == "gemini" {
-		body := map[string]interface{}{
-			"contents": []map[string]interface{}{
-				{
-					"parts": []map[string]interface{}{
-						{"text": "ping"},
-					},
-				},
-			},
-			"generationConfig": map[string]interface{}{
-				"maxOutputTokens": 1,
-			},
-		}
-		bodyBytes, _ = json.Marshal(body)
-	} else {
-		body := map[string]interface{}{
-			"model":      pm.ModelID,
-			"messages":   []map[string]string{{"role": "user", "content": "简短介绍一下自己。"}},
-			"max_tokens": 1, // 只生成1个token，最小化测试成本
-			"stream":     false,
-		}
-		bodyBytes, _ = json.Marshal(body)
-	}
-
-	w := httptest.NewRecorder()
-	testCtx, _ := gin.CreateTestContext(w)
-	testCtx.Request = httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
-	testCtx.Request.Header.Set("Content-Type", "application/json")
-
-	providerImpl := provider.NewAutomatedProvider(
+	result := protocolsPkg.RunTest(
+		protocol,
 		p.OpenAIBaseURL,
 		p.AnthropicBaseURL,
 		p.GeminiBaseURL,
 		p.APIKey,
+		pm.ModelID,
 	)
-	usage := &provider.Usage{}
-
-	ctx, cancel := context.WithTimeout(testCtx.Request.Context(), 30*time.Second)
-	defer cancel()
-	testCtx.Request = testCtx.Request.WithContext(ctx)
-
-	start := time.Now()
-	var err error
-	callMethod := "direct"
-
-	if protocol == "openai" {
-		if p.OpenAIBaseURL == "" {
-			callMethod = "convert"
-		}
-		err = providerImpl.ExecuteOpenAIRequest(testCtx, pm, usage)
-	} else if protocol == "anthropic" {
-		if p.AnthropicBaseURL == "" {
-			callMethod = "convert"
-		}
-		err = providerImpl.ExecuteAnthropicRequest(testCtx, pm, usage)
-	} else if protocol == "gemini" {
-		if p.GeminiBaseURL == "" {
-			callMethod = "convert"
-		}
-		err = providerImpl.ExecuteGeminiRequest(testCtx, pm, usage)
-	}
-
-	latencyMs := time.Since(start).Milliseconds()
-
-	respBody, _ := io.ReadAll(w.Body)
-	response := extractResponseContent(respBody, protocol)
-
-	errorMsg := ""
-	success := err == nil && w.Code == 200
-
-	if err != nil {
-		errorMsg = err.Error()
-	} else if w.Code != 200 {
-		var errObj struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(respBody, &errObj); err == nil && errObj.Error.Message != "" {
-			errorMsg = errObj.Error.Message
-		} else {
-			var errStr struct {
-				Error string `json:"error"`
-			}
-			if err := json.Unmarshal(respBody, &errStr); err == nil && errStr.Error != "" {
-				errorMsg = errStr.Error
-			} else {
-				errorMsg = "HTTP " + strconv.Itoa(w.Code)
-			}
-		}
-	}
 
 	return protocolTestResult{
 		Protocol:     protocol,
-		Success:      success,
-		CallMethod:   callMethod,
-		LatencyMs:    latencyMs,
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-		Response:     response,
-		Error:        errorMsg,
+		Success:      result.Success,
+		CallMethod:   result.CallMethod,
+		LatencyMs:    result.LatencyMs,
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+		Response:     result.Response,
+		Error:        result.Error,
 	}
 }
 

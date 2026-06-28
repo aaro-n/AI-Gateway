@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"ai-gateway/internal/model"
-	providerPkg "ai-gateway/internal/provider"
+	protocolsPkg "ai-gateway/internal/protocols"
 )
 
 type ProviderModelHandler struct{}
@@ -304,13 +304,12 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	providerImpl := providerPkg.NewAutomatedProvider(
+	models, err := protocolsPkg.AutoSyncModels(provider.ID,
 		provider.OpenAIBaseURL,
 		provider.AnthropicBaseURL,
 		provider.GeminiBaseURL,
 		provider.APIKey,
 	)
-	models, err := providerImpl.SyncModels(provider.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

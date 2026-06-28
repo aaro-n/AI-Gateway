@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ai-gateway/internal/provider/capabilities"
+	"ai-gateway/internal/protocols/capabilities"
 )
 
 // ProtocolCompareHandler 协议对比 API

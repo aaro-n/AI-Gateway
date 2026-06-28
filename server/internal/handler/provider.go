@@ -8,8 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
-	providerPkg "ai-gateway/internal/provider"
+	protocolsPkg "ai-gateway/internal/protocols"
 	"ai-gateway/internal/router"
 )
 
@@ -317,13 +318,7 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 		}
 	}
 
-	providerImpl := providerPkg.NewAutomatedProvider(
-		openaiURL,
-		anthropicURL,
-		geminiURL,
-		apiKey,
-	)
-	models, err := providerImpl.SyncModels(0)
+	models, err := protocolsPkg.AutoSyncModels(0, openaiURL, anthropicURL, geminiURL, apiKey)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
 		return
@@ -348,13 +343,12 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		return
 	}
 
-	providerImpl := providerPkg.NewAutomatedProvider(
+	models, err := protocolsPkg.AutoSyncModels(provider.ID,
 		provider.OpenAIBaseURL,
 		provider.AnthropicBaseURL,
 		provider.GeminiBaseURL,
 		provider.APIKey,
 	)
-	models, err := providerImpl.SyncModels(provider.ID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
 		return
@@ -373,9 +367,9 @@ type protocolMetaResponse struct {
 }
 
 func (h *ProviderHandler) GetProtocolsMeta(c *gin.Context) {
-	protocols := providerPkg.AllProtocols()
-	result := make([]protocolMetaResponse, 0, len(protocols))
-	for _, p := range protocols {
+	all := registry.All()
+	result := make([]protocolMetaResponse, 0, len(all))
+	for _, p := range all {
 		result = append(result, protocolMetaResponse{
 			Name:           p.Name,
 			KeyPrefix:      p.KeyPrefix,

@@ -12,11 +12,11 @@ import (
 	"ai-gateway/internal/config"
 	coreHandler "ai-gateway/internal/core/handler"
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/debug"
 	"ai-gateway/internal/handler"
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/provider"
 	"ai-gateway/res"
 
 	// 错误日志（终端输出）
@@ -60,7 +60,7 @@ func main() {
 		log.Fatalf("Failed to init default admin: %v", err)
 	}
 
-	provider.SetDebugMode(cfg.Debug.Provider)
+	debug.SetEnabled(cfg.Debug.Provider)
 	mcp.SetDebugMode(cfg.Debug.MCP)
 
 	if cfg.Debug.Gin {

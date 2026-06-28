@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
-	providerPkg "ai-gateway/internal/provider"
 )
 
 type KeyHandler struct{}
@@ -92,7 +92,7 @@ func generateKey() string {
 }
 
 func generateKeyFormat(format string) string {
-	desc, ok := providerPkg.GetProtocol(format)
+	desc, ok := registry.Get(format)
 	if !ok {
 		bytes := make([]byte, 24)
 		rand.Read(bytes)
@@ -106,7 +106,7 @@ func generateKeyFormat(format string) string {
 
 func createFormatsForKey(keyID uint) (map[string]string, error) {
 	formats := make(map[string]string)
-	for name := range providerPkg.AllProtocols() {
+	for name := range registry.All() {
 		formattedKey := generateKeyFormat(name)
 		kf := model.KeyFormat{
 			KeyID:        keyID,
