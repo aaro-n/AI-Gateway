@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/provider"
 	"ai-gateway/internal/router"
 )
 
@@ -427,7 +427,7 @@ func (h *UsageHandler) ModelLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"logs": logsResponses})
 }
 
-func NewModelLog(source string, clientIPs string, keyID uint, keyName, modelName string, result *router.RouteResult, matched bool, usage *provider.Usage, latencyMs int, status string, errorMsg string) *model.ModelLog {
+func NewModelLog(source string, clientIPs string, keyID uint, keyName, modelName string, result *router.RouteResult, matched bool, usage *registry.Usage, latencyMs int, status string, errorMsg string) *model.ModelLog {
 	actualModelName := result.ProviderModel.DisplayName
 	if actualModelName == "" {
 		actualModelName = result.ProviderModel.ModelID

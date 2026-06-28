@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,6 +21,7 @@ type createKeyRequest struct {
 	Models     []uint  `json:"models"`
 	ExpiresAt  *string `json:"expires_at"`
 	AccessMode string  `json:"access_mode"` // "mapping", "direct", "hybrid"
+	Format     string  `json:"format"`      // "openai", "anthropic", "gemini" - empty means all formats
 }
 
 type updateKeyRequest struct {
@@ -119,6 +121,37 @@ func createFormatsForKey(keyID uint) (map[string]string, error) {
 	return formats, nil
 }
 
+// createFormatForKey 创建单个指定格式的 KeyFormat
+func createFormatForKey(keyID uint, format string) (map[string]string, error) {
+	formats := make(map[string]string)
+	formattedKey := generateKeyFormat(format)
+	kf := model.KeyFormat{
+		KeyID:        keyID,
+		Format:       format,
+		FormattedKey: formattedKey,
+	}
+	if err := model.DB.Create(&kf).Error; err != nil {
+		return nil, err
+	}
+	formats[format] = formattedKey
+
+	// 如果格式不是 openai，也需要创建openai格式作为兼容
+	if format != "openai" {
+		openaiKey := generateKeyFormat("openai")
+		kf2 := model.KeyFormat{
+			KeyID:        keyID,
+			Format:       "openai",
+			FormattedKey: openaiKey,
+		}
+		if err := model.DB.Create(&kf2).Error; err != nil {
+			return nil, err
+		}
+		formats["openai"] = openaiKey
+	}
+
+	return formats, nil
+}
+
 type keyListItemResponse struct {
 	ID                uint               `json:"id"`
 	Key               string             `json:"key"`
@@ -211,11 +244,17 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	accessMode := req.AccessMode
 	if accessMode == "" {
-		accessMode = "mapping"
+		accessMode = "hybrid"
+	}
+
+	// 生成主密钥：如果指定了格式则使用对应格式，否则使用默认 sk- 前缀
+	rawKey := generateKey()
+	if req.Format != "" {
+		rawKey = generateKeyFormat(req.Format)
 	}
 
 	key := model.Key{
-		Key:        generateKey(),
+		Key:        rawKey,
 		Name:       req.Name,
 		ExpiresAt:  expiresAt,
 		Enabled:    true,
@@ -227,9 +266,16 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		return
 	}
 
-	formats, err := createFormatsForKey(key.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// 创建格式化密钥：如果指定了 format 则只创建该格式，否则创建全部格式
+	var formats map[string]string
+	var fmtErr error
+	if req.Format != "" {
+		formats, fmtErr = createFormatForKey(key.ID, req.Format)
+	} else {
+		formats, fmtErr = createFormatsForKey(key.ID)
+	}
+	if fmtErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmtErr.Error()})
 		return
 	}
 
@@ -264,7 +310,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"key": keyResponse{
 			ID:         key.ID,
-			Key:        key.Key,
+			Key:        rawKey,
 			Name:       key.Name,
 			Enabled:    key.Enabled,
 			AccessMode: key.AccessMode,
@@ -273,7 +319,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 			Models:     models,
 			Formats:    formats,
 		},
-		"raw_key": key.Key,
+		"raw_key": rawKey,
 		"formats": formats,
 	})
 }
@@ -287,6 +333,7 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 
 	// 硬删除关联表
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyModel{})
+	model.DB.Where("key_id = ?", id).Delete(&model.KeyProvider{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPTool{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPResource{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPPrompt{})
@@ -469,6 +516,12 @@ func (h *KeyHandler) AddModel(c *gin.Context) {
 		return
 	}
 
+	// 重复检查：该虚拟模型名是否已在该 key 的"模型厂商"直通白名单中
+	if conflict := h.checkMappingModelConflict(uint(keyID), m.Name); conflict != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": conflict})
+		return
+	}
+
 	var existing model.KeyModel
 	if err := model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).First(&existing).Error; err == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "association already exists"})
@@ -517,6 +570,323 @@ func (h *KeyHandler) ClearModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "all model associations cleared"})
 }
 
+// ── Provider (模型厂商) handlers ──
+
+type providerWithStatus struct {
+	ID         uint   `json:"id"`
+	Name       string `json:"name"`
+	ModelCount int64  `json:"model_count"`
+	Config     string `json:"config"`
+	Protocol   string `json:"protocol"`
+	KeyPrefix  string `json:"key_prefix"`
+	Selected   bool   `json:"selected"`
+}
+
+func keyFormatToProtocol(format string) string {
+	switch format {
+	case "openai":
+		return "openai"
+	case "anthropic":
+		return "anthropic"
+	case "gemini":
+		return "gemini"
+	default:
+		return ""
+	}
+}
+
+func (h *KeyHandler) ListProviders(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	// 获取 key 格式确定协议类型
+	var keyFormats []model.KeyFormat
+	model.DB.Where("key_id = ?", keyID).Find(&keyFormats)
+
+	keyFormat := "openai"
+	for _, kf := range keyFormats {
+		if kf.Format != "openai" {
+			keyFormat = kf.Format
+			break
+		}
+	}
+	protocol := keyFormatToProtocol(keyFormat)
+
+	// 获取该协议下所有启用的 Provider
+	var providers []model.Provider
+	fieldMap := map[string]string{
+		"openai":    "openai_base_url != ''",
+		"anthropic": "anthropic_base_url != ''",
+		"gemini":    "gemini_base_url != ''",
+	}
+	if cond, ok := fieldMap[protocol]; ok {
+		model.DB.Where("enabled = ?", true).Where(cond).Find(&providers)
+	}
+
+	// 获取已选中的 provider id
+	var selected []model.KeyProvider
+	model.DB.Where("key_id = ?", keyID).Find(&selected)
+	selectedIDs := make(map[uint]bool)
+	for _, s := range selected {
+		selectedIDs[s.ProviderID] = true
+	}
+
+	result := make([]providerWithStatus, 0, len(providers))
+	for _, p := range providers {
+		var count int64
+		model.DB.Model(&model.ProviderModel{}).Where("provider_id = ?", p.ID).Count(&count)
+
+		result = append(result, providerWithStatus{
+			ID:         p.ID,
+			Name:       p.Name,
+			ModelCount: count,
+			Config:     p.Config,
+			Protocol:   protocol,
+			KeyPrefix:  "",
+			Selected:   selectedIDs[p.ID],
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"providers": result})
+}
+
+func (h *KeyHandler) AddProvider(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	providerID, err := strconv.ParseUint(c.Param("provider_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		return
+	}
+
+	var key model.Key
+	if err := model.DB.First(&key, keyID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
+		return
+	}
+	var prov model.Provider
+	if err := model.DB.First(&prov, providerID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+		return
+	}
+
+	var existing model.KeyProvider
+	if err := model.DB.Where("key_id = ? AND provider_id = ?", keyID, providerID).First(&existing).Error; err == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "already added"})
+		return
+	}
+
+	kp := model.KeyProvider{
+		KeyID:      uint(keyID),
+		ProviderID: uint(providerID),
+	}
+	model.DB.Create(&kp)
+
+	c.JSON(http.StatusOK, gin.H{"message": "provider added"})
+}
+
+func (h *KeyHandler) RemoveProvider(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	providerID, err := strconv.ParseUint(c.Param("provider_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		return
+	}
+
+	model.DB.Where("key_id = ? AND provider_id = ?", keyID, providerID).Delete(&model.KeyProvider{})
+
+	c.JSON(http.StatusOK, gin.H{"message": "provider removed"})
+}
+
+func (h *KeyHandler) ClearProviders(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyProvider{})
+
+	c.JSON(http.StatusOK, gin.H{"message": "all providers cleared"})
+}
+
+// =============================================================================
+// KeyProviderModel — 模型ID级别的直通白名单
+// =============================================================================
+
+type providerModelWithStatusResponse struct {
+	ID            uint   `json:"id"`
+	ProviderID    uint   `json:"provider_id"`
+	ProviderName  string `json:"provider_name"`
+	ModelID       string `json:"model_id"`
+	DisplayName   string `json:"display_name"`
+	OwnedBy       string `json:"owned_by"`
+	ContextWindow int    `json:"context_window"`
+	MaxOutput     int    `json:"max_output"`
+	Selected      bool   `json:"selected"`
+}
+
+// ListProviderModels 列出某 key 可直通的模型（按厂商分组返回）
+// GET /keys/:id/provider-models
+func (h *KeyHandler) ListProviderModels(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+
+	// 获取该 key 已选中的 provider_model_id
+	var selectedIDs []uint
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &selectedIDs)
+	selectedMap := make(map[uint]bool)
+	for _, id := range selectedIDs {
+		selectedMap[id] = true
+	}
+
+	// 获取所有启用的 provider 下的可用 provider_models
+	var pms []model.ProviderModel
+	model.DB.Preload("Provider").
+		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true).
+		Where("provider_models.is_available = ?", true).
+		Find(&pms)
+
+	result := make([]providerModelWithStatusResponse, 0, len(pms))
+	for _, pm := range pms {
+		providerName := ""
+		if pm.Provider != nil {
+			providerName = pm.Provider.Name
+		}
+		result = append(result, providerModelWithStatusResponse{
+			ID:            pm.ID,
+			ProviderID:    pm.ProviderID,
+			ProviderName:  providerName,
+			ModelID:       pm.ModelID,
+			DisplayName:   pm.DisplayName,
+			OwnedBy:       pm.OwnedBy,
+			ContextWindow: pm.ContextWindow,
+			MaxOutput:     pm.MaxOutput,
+			Selected:      selectedMap[pm.ID],
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"models": result})
+}
+
+// AddProviderModel 添加一个直通模型到白名单
+// POST /keys/:id/provider-models/:pmid
+func (h *KeyHandler) AddProviderModel(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
+		return
+	}
+
+	var pm model.ProviderModel
+	if err := model.DB.First(&pm, pmid).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "provider model not found"})
+		return
+	}
+
+	// 重复检查：该 model_id 是否已在该 key 的"模型映射"白名单中
+	if conflict := h.checkModelIDConflict(uint(keyID), pm.ModelID); conflict != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": conflict})
+		return
+	}
+
+	var existing model.KeyProviderModel
+	if err := model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).First(&existing).Error; err == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "already added"})
+		return
+	}
+
+	kpm := model.KeyProviderModel{
+		KeyID:           uint(keyID),
+		ProviderModelID: uint(pmid),
+	}
+	if err := model.DB.Create(&kpm).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "provider model added"})
+}
+
+// RemoveProviderModel 从直通白名单移除一个模型
+// DELETE /keys/:id/provider-models/:pmid
+func (h *KeyHandler) RemoveProviderModel(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
+		return
+	}
+	model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).Delete(&model.KeyProviderModel{})
+	c.JSON(http.StatusOK, gin.H{"message": "provider model removed"})
+}
+
+// ClearProviderModels 清空直通白名单（= 全部允许）
+// DELETE /keys/:id/provider-models
+func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyProviderModel{})
+	c.JSON(http.StatusOK, gin.H{"message": "all provider models cleared"})
+}
+
+// checkModelIDConflict 检查某个 modelID 是否同时出现在该 key 的"模型映射"白名单中。
+// 返回非空字符串表示有冲突（含冲突详情），空字符串表示无冲突。
+func (h *KeyHandler) checkModelIDConflict(keyID uint, modelID string) string {
+	// 该 provider_model 的 model_id 是否与某个虚拟模型(models.name)同名，
+	// 且该虚拟模型已在该 key 的 key_models 白名单中。
+	var kmIDs []uint
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Pluck("model_id", &kmIDs)
+	if len(kmIDs) == 0 {
+		return "" // 映射白名单为空 = 全部允许，不构成"重复"（直通优先即可）
+	}
+	var m model.Model
+	if err := model.DB.Where("name = ? AND id IN ?", modelID, kmIDs).First(&m).Error; err != nil {
+		return ""
+	}
+	return fmt.Sprintf("model ID '%s' 已在'模型映射'白名单中，不允许同时出现在'模型厂商'直通白名单", modelID)
+}
+
+// checkMappingModelConflict 检查添加虚拟模型到映射白名单时，是否与直通白名单冲突。
+func (h *KeyHandler) checkMappingModelConflict(keyID uint, virtualModelName string) string {
+	var kpmIDs []uint
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &kpmIDs)
+	if len(kpmIDs) == 0 {
+		return ""
+	}
+	var pm model.ProviderModel
+	if err := model.DB.Where("model_id = ? AND id IN ?", virtualModelName, kpmIDs).First(&pm).Error; err != nil {
+		return ""
+	}
+	return fmt.Sprintf("model ID '%s' 已在'模型厂商'直通白名单中，不允许同时出现在'模型映射'白名单", virtualModelName)
+}
+
 func (h *KeyHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -557,6 +927,10 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	})
 }
 
+type resetKeyRequest struct {
+	Format string `json:"format"` // "openai", "anthropic", "gemini"
+}
+
 func (h *KeyHandler) Reset(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -564,22 +938,34 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 		return
 	}
 
+	var req resetKeyRequest
+	c.ShouldBindJSON(&req) // optional body
+
 	var key model.Key
 	if err := model.DB.First(&key, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
 		return
 	}
 
-	newKey := generateKey()
+	// 如果指定了format则使用对应格式，否则使用默认sk-前缀
+	rawKey := generateKey()
+	if req.Format != "" {
+		rawKey = generateKeyFormat(req.Format)
+	}
 
-	if err := model.DB.Model(&key).Update("key", newKey).Error; err != nil {
+	if err := model.DB.Model(&key).Update("key", rawKey).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Delete existing key formats and generate new ones
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyFormat{})
-	formats, err := createFormatsForKey(key.ID)
+	var formats map[string]string
+	if req.Format != "" {
+		formats, err = createFormatForKey(key.ID, req.Format)
+	} else {
+		formats, err = createFormatsForKey(key.ID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create new key formats: " + err.Error()})
 		return
@@ -626,7 +1012,7 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 			Models:     models,
 			Formats:    maskedFormats,
 		},
-		"raw_key": key.Key,
+		"raw_key": rawKey,
 		"formats": formats,
 	})
 }

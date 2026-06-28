@@ -3,7 +3,6 @@ package gemini
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/unified"
 )
 
 type GeminiProvider struct {
@@ -93,233 +93,250 @@ func (p *GeminiProvider) SyncModels(providerID uint) ([]registry.ProviderModel, 
 }
 
 // =============================================================================
-// HandleNative — Gemini 原生直通（只替换模型名，不改请求体格式）
+// ToUnified — Gemini 请求 → UnifiedRequest
 // =============================================================================
 
-func (p *GeminiProvider) HandleNative(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	body, err := io.ReadAll(ctx.Request.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
+func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Request, error) {
+	var raw struct {
+		Contents          []json.RawMessage `json:"contents"`
+		SystemInstruction json.RawMessage   `json:"systemInstruction,omitempty"`
+		GenerationConfig  struct {
+			Temperature     *float64 `json:"temperature,omitempty"`
+			TopP            *float64 `json:"topP,omitempty"`
+			MaxOutputTokens *int     `json:"maxOutputTokens,omitempty"`
+			StopSequences   []string `json:"stopSequences,omitempty"`
+		} `json:"generationConfig,omitempty"`
+		Tools json.RawMessage `json:"tools,omitempty"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse gemini body: %w", err)
 	}
 
-	// 判断是 generateContent 还是 streamGenerateContent
-	method := "generateContent"
-	if strings.Contains(ctx.Request.URL.Path, "streamGenerateContent") {
-		method = "streamGenerateContent"
-	}
-
-	url := fmt.Sprintf("%s/models/%s:%s", p.cfg.BaseURL, modelID, method)
-	if ctx.Request.URL.RawQuery != "" {
-		url = url + "?" + ctx.Request.URL.RawQuery
-		if !strings.Contains(url, "key=") {
-			url = url + "&key=" + p.cfg.APIKey
+	// systemInstruction
+	systemPrompt := ""
+	if len(raw.SystemInstruction) > 0 {
+		var si struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
 		}
-	} else {
-		url = url + "?key=" + p.cfg.APIKey
-	}
-
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		ctx.Status(resp.StatusCode)
-		ctx.Writer.Write(respBody)
-		return fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	// 透传响应
-	ctx.Status(resp.StatusCode)
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			ctx.Header(k, v)
-		}
-	}
-	if method == "streamGenerateContent" {
-		return p.copyGeminiStream(ctx.Request.Context(), ctx.Writer, resp.Body, usage)
-	}
-	return p.copyGeminiResponse(ctx.Writer, resp.Body, usage)
-}
-
-// =============================================================================
-// FromOpenAI — OpenAI 请求 → Gemini 格式，发送，响应转回 OpenAI
-// =============================================================================
-
-func (p *GeminiProvider) FromOpenAI(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	body, err := io.ReadAll(ctx.Request.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
-	}
-
-	var openAIReq struct {
-		Model       string                   `json:"model"`
-		Messages    []map[string]interface{} `json:"messages"`
-		Stream      bool                     `json:"stream"`
-		Temperature *float64                 `json:"temperature,omitempty"`
-		MaxTokens   *int                     `json:"max_tokens,omitempty"`
-	}
-	if err := json.Unmarshal(body, &openAIReq); err != nil {
-		return fmt.Errorf("parse body: %w", err)
-	}
-
-	geminiReq := p.convertOpenAIToGemini(openAIReq.Messages, openAIReq.Temperature, openAIReq.MaxTokens)
-
-	geminiBody, _ := json.Marshal(geminiReq)
-
-	method := "generateContent"
-	if openAIReq.Stream {
-		method = "streamGenerateContent"
-	}
-
-	url := fmt.Sprintf("%s/models/%s:%s?key=%s", p.cfg.BaseURL, modelID, method, p.cfg.APIKey)
-	if openAIReq.Stream {
-		url = url + "&alt=sse"
-	}
-
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), "POST", url, bytes.NewReader(geminiBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		ctx.Status(resp.StatusCode)
-		ctx.Writer.Write(respBody)
-		return fmt.Errorf("Gemini API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if openAIReq.Stream {
-		ctx.Status(http.StatusOK)
-		ctx.Header("Content-Type", "text/event-stream")
-		ctx.Header("Cache-Control", "no-cache")
-		ctx.Header("Connection", "keep-alive")
-		return p.streamGeminiToOpenAI(ctx.Request.Context(), resp.Body, ctx.Writer, modelID, usage)
-	}
-
-	body, _ = io.ReadAll(resp.Body)
-	openAIResp, err := p.convertGeminiResponseToOpenAI(body, modelID, usage)
-	if err != nil {
-		return err
-	}
-	ctx.Status(http.StatusOK)
-	ctx.Header("Content-Type", "application/json")
-	ctx.Writer.Write(openAIResp)
-	return nil
-}
-
-// =============================================================================
-// 转换：OpenAI → Gemini
-// =============================================================================
-
-func (p *GeminiProvider) convertOpenAIToGemini(messages []map[string]interface{}, temperature *float64, maxTokens *int) map[string]interface{} {
-	systemInstruction := ""
-	contents := make([]map[string]interface{}, 0)
-
-	for _, msg := range messages {
-		role, _ := msg["role"].(string)
-		content := msg["content"]
-
-		if role == "system" {
-			if s, ok := content.(string); ok {
-				systemInstruction += s + "\n"
+		if json.Unmarshal(raw.SystemInstruction, &si) == nil {
+			for _, part := range si.Parts {
+				systemPrompt += part.Text
 			}
+		}
+	}
+
+	// contents → messages
+	msgs := make([]unified.Message, 0, len(raw.Contents))
+	for _, rawContent := range raw.Contents {
+		var c struct {
+			Role  string            `json:"role"`
+			Parts []json.RawMessage `json:"parts"`
+		}
+		if err := json.Unmarshal(rawContent, &c); err != nil {
+			return nil, fmt.Errorf("parse gemini content: %w", err)
+		}
+		role := "user"
+		if c.Role == "model" {
+			role = "assistant"
+		}
+
+		// 合并 parts 为 content
+		textParts := make([]string, 0)
+		for _, partRaw := range c.Parts {
+			var part map[string]interface{}
+			if json.Unmarshal(partRaw, &part) != nil {
+				continue
+			}
+			if text, ok := part["text"].(string); ok {
+				textParts = append(textParts, text)
+			}
+		}
+		msgs = append(msgs, unified.Message{
+			Role:    role,
+			Content: unified.StringContent(strings.Join(textParts, "\n")),
+		})
+	}
+
+	req := &unified.Request{
+		Model:          modelID,
+		Messages:       msgs,
+		SystemPrompt:   systemPrompt,
+		Temperature:    raw.GenerationConfig.Temperature,
+		TopP:           raw.GenerationConfig.TopP,
+		Stop:           raw.GenerationConfig.StopSequences,
+		Stream:         false, // Gemini 通过 URL 区分流式，ToUnified 无法感知，默认 false
+		SourceProtocol: "gemini",
+	}
+	if raw.GenerationConfig.MaxOutputTokens != nil {
+		req.MaxTokens = *raw.GenerationConfig.MaxOutputTokens
+	}
+	return req, nil
+}
+
+// =============================================================================
+// FromUnified — UnifiedRequest → Gemini 请求，发上游，返回统一响应
+// =============================================================================
+
+func (p *GeminiProvider) FromUnified(req *unified.Request) (*unified.Response, <-chan unified.StreamEvent, error) {
+	geminiReq := p.unifiedToGemini(req)
+	body, err := json.Marshal(geminiReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	method := "generateContent"
+	if req.Stream {
+		method = "streamGenerateContent"
+	}
+	url := fmt.Sprintf("%s/models/%s:%s?key=%s", p.cfg.BaseURL, req.Model, method, p.cfg.APIKey)
+	if req.Stream {
+		url += "&alt=sse"
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, &registry.HTTPError{StatusCode: resp.StatusCode, Body: respBody}
+	}
+
+	if req.Stream {
+		events := p.streamGeminiToUnified(resp.Body)
+		return nil, events, nil
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	uresp, err := p.parseGeminiResponse(respBody)
+	return uresp, nil, err
+}
+
+// unifiedToGemini 将 UnifiedRequest 转为 Gemini 请求体
+func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interface{} {
+	contents := make([]map[string]interface{}, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		if m.Role == "system" {
 			continue
 		}
-
 		geminiRole := "user"
-		if role == "assistant" || role == "model" {
+		if m.Role == "assistant" {
 			geminiRole = "model"
 		}
-
-		parts := p.convertContentToParts(content)
+		parts := p.unifiedContentToGeminiParts(m)
 		contents = append(contents, map[string]interface{}{
 			"role":  geminiRole,
 			"parts": parts,
 		})
 	}
 
-	req := map[string]interface{}{
+	result := map[string]interface{}{
 		"contents": contents,
 	}
-	if systemInstruction != "" {
-		req["systemInstruction"] = map[string]interface{}{
-			"parts": []map[string]interface{}{{"text": strings.TrimSpace(systemInstruction)}},
+	if req.SystemPrompt != "" {
+		result["systemInstruction"] = map[string]interface{}{
+			"parts": []map[string]interface{}{{"text": req.SystemPrompt}},
 		}
 	}
-	generationConfig := map[string]interface{}{}
-	if temperature != nil {
-		generationConfig["temperature"] = *temperature
+
+	genConfig := map[string]interface{}{}
+	if req.Temperature != nil {
+		genConfig["temperature"] = *req.Temperature
 	}
-	if maxTokens != nil {
-		generationConfig["maxOutputTokens"] = *maxTokens
+	if req.TopP != nil {
+		genConfig["topP"] = *req.TopP
+	}
+	if req.MaxTokens > 0 {
+		genConfig["maxOutputTokens"] = req.MaxTokens
 	} else {
-		generationConfig["maxOutputTokens"] = 4096
+		genConfig["maxOutputTokens"] = 4096
 	}
-	req["generationConfig"] = generationConfig
-	return req
+	if len(req.Stop) > 0 {
+		genConfig["stopSequences"] = req.Stop
+	}
+	result["generationConfig"] = genConfig
+
+	if len(req.Tools) > 0 {
+		functionDeclarations := make([]map[string]interface{}, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			functionDeclarations = append(functionDeclarations, map[string]interface{}{
+				"name":        t.Function.Name,
+				"description": t.Function.Description,
+				"parameters":  t.Function.Parameters,
+			})
+		}
+		result["tools"] = []map[string]interface{}{
+			{"functionDeclarations": functionDeclarations},
+		}
+	}
+	return result
 }
 
-func (p *GeminiProvider) convertContentToParts(content interface{}) []map[string]interface{} {
+func (p *GeminiProvider) unifiedContentToGeminiParts(m unified.Message) []map[string]interface{} {
 	parts := make([]map[string]interface{}, 0)
 
-	switch v := content.(type) {
-	case string:
-		parts = append(parts, map[string]interface{}{"text": v})
-	case []interface{}:
-		for _, item := range v {
-			if block, ok := item.(map[string]interface{}); ok {
-				blockType, _ := block["type"].(string)
-				switch blockType {
-				case "text":
-					if text, ok := block["text"].(string); ok {
-						parts = append(parts, map[string]interface{}{"text": text})
-					}
-				case "image_url":
-					if imgURL, ok := block["image_url"].(map[string]interface{}); ok {
-						if url, ok := imgURL["url"].(string); ok {
-							parts = append(parts, map[string]interface{}{
-								"inlineData": map[string]interface{}{
-									"mimeType": "image/jpeg",
-									"data":     strings.TrimPrefix(url, "data:image/jpeg;base64,"),
-								},
-							})
-						}
-					}
+	if s := unified.ContentString(m.Content); s != "" {
+		parts = append(parts, map[string]interface{}{"text": s})
+		return parts
+	}
+
+	for _, b := range unified.ContentBlocks(m.Content) {
+		switch b.Type {
+		case "text":
+			parts = append(parts, map[string]interface{}{"text": b.Text})
+		case "image_url":
+			if b.ImageURL != nil {
+				url := b.ImageURL.URL
+				if strings.HasPrefix(url, "data:") {
+					mediaType, data := parseDataURL(url)
+					parts = append(parts, map[string]interface{}{
+						"inlineData": map[string]interface{}{
+							"mimeType": mediaType,
+							"data":     data,
+						},
+					})
 				}
 			}
 		}
 	}
 
 	if len(parts) == 0 {
-		parts = append(parts, map[string]interface{}{"text": fmt.Sprintf("%v", content)})
+		parts = append(parts, map[string]interface{}{"text": ""})
 	}
 	return parts
 }
 
+func parseDataURL(url string) (mediaType, data string) {
+	if idx := strings.Index(url, ";"); idx > 0 {
+		mediaType = strings.TrimPrefix(url[:idx], "data:")
+		if comma := strings.Index(url, ","); comma > 0 {
+			data = url[comma+1:]
+		}
+	}
+	return
+}
+
 // =============================================================================
-// 响应转换：Gemini → OpenAI
+// 解析 Gemini 响应 → UnifiedResponse
 // =============================================================================
 
-func (p *GeminiProvider) convertGeminiResponseToOpenAI(body []byte, modelID string, usage *registry.Usage) ([]byte, error) {
-	var geminiResp struct {
+func (p *GeminiProvider) parseGeminiResponse(body []byte) (*unified.Response, error) {
+	var raw struct {
 		Candidates []struct {
 			Content struct {
 				Role  string `json:"role"`
@@ -335,140 +352,210 @@ func (p *GeminiProvider) convertGeminiResponseToOpenAI(body []byte, modelID stri
 			TotalTokenCount      int `json:"totalTokenCount"`
 		} `json:"usageMetadata"`
 	}
-	if err := json.Unmarshal(body, &geminiResp); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
 
-	usage.InputTokens = geminiResp.UsageMetadata.PromptTokenCount
-	usage.OutputTokens = geminiResp.UsageMetadata.CandidatesTokenCount
+	uresp := &unified.Response{
+		Usage: unified.Usage{
+			InputTokens:  raw.UsageMetadata.PromptTokenCount,
+			OutputTokens: raw.UsageMetadata.CandidatesTokenCount,
+		},
+	}
 
-	combined := ""
-	if len(geminiResp.Candidates) > 0 {
-		for _, part := range geminiResp.Candidates[0].Content.Parts {
-			if part.Text != "" {
-				combined += part.Text
+	if len(raw.Candidates) > 0 {
+		var text string
+		for _, part := range raw.Candidates[0].Content.Parts {
+			text += part.Text
+		}
+		uresp.Content = text
+
+		switch raw.Candidates[0].FinishReason {
+		case "MAX_TOKENS":
+			uresp.FinishReason = "length"
+		case "STOP":
+			uresp.FinishReason = "stop"
+		default:
+			uresp.FinishReason = "stop"
+		}
+	}
+	return uresp, nil
+}
+
+// =============================================================================
+// 流式：Gemini SSE → unified.StreamEvent chan
+// =============================================================================
+
+func (p *GeminiProvider) streamGeminiToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, 32)
+	go func() {
+		defer body.Close()
+		defer close(ch)
+		reader := bufio.NewReader(body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					ch <- unified.StreamEvent{Type: unified.EventError}
+				}
+				return
+			}
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+			var chunk struct {
+				Candidates []struct {
+					Content struct {
+						Parts []struct {
+							Text string `json:"text"`
+						} `json:"parts"`
+					} `json:"content"`
+					FinishReason string `json:"finishReason"`
+				} `json:"candidates"`
+				UsageMetadata *struct {
+					PromptTokenCount     int `json:"promptTokenCount"`
+					CandidatesTokenCount int `json:"candidatesTokenCount"`
+				} `json:"usageMetadata"`
+			}
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+
+			if chunk.UsageMetadata != nil {
+				ch <- unified.StreamEvent{
+					Type: unified.EventUsage,
+					Usage: &unified.Usage{
+						InputTokens:  chunk.UsageMetadata.PromptTokenCount,
+						OutputTokens: chunk.UsageMetadata.CandidatesTokenCount,
+					},
+				}
+			}
+
+			if len(chunk.Candidates) > 0 {
+				for _, part := range chunk.Candidates[0].Content.Parts {
+					if part.Text != "" {
+						ch <- unified.StreamEvent{
+							Type:  unified.EventChunk,
+							Delta: &unified.Delta{Content: part.Text},
+						}
+					}
+				}
+				if chunk.Candidates[0].FinishReason != "" {
+					finishReason := "stop"
+					if chunk.Candidates[0].FinishReason == "MAX_TOKENS" {
+						finishReason = "length"
+					}
+					ch <- unified.StreamEvent{
+						Type:         unified.EventDone,
+						FinishReason: finishReason,
+					}
+				}
 			}
 		}
-	}
+	}()
+	return ch
+}
 
-	finishReason := "stop"
-	if len(geminiResp.Candidates) > 0 {
-		if geminiResp.Candidates[0].FinishReason == "MAX_TOKENS" {
-			finishReason = "length"
+// =============================================================================
+// FormatUnified — Unified 响应/流 → Gemini 客户端格式
+// =============================================================================
+
+func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, c *gin.Context, usage *registry.Usage) error {
+	if resp != nil {
+		// 非流式
+		usage.InputTokens = resp.Usage.InputTokens
+		usage.OutputTokens = resp.Usage.OutputTokens
+
+		parts := make([]map[string]interface{}, 0)
+		if resp.Content != "" {
+			parts = append(parts, map[string]interface{}{"text": resp.Content})
 		}
-	}
 
-	resp := map[string]interface{}{
-		"object": "chat.completion",
-		"model":  modelID,
-		"choices": []map[string]interface{}{
-			{
-				"index":         0,
-				"message":       map[string]interface{}{"role": "assistant", "content": combined},
-				"finish_reason": finishReason,
+		finishReason := "STOP"
+		if resp.FinishReason == "length" {
+			finishReason = "MAX_TOKENS"
+		}
+
+		geminiResp := map[string]interface{}{
+			"candidates": []map[string]interface{}{
+				{
+					"content": map[string]interface{}{
+						"role":  "model",
+						"parts": parts,
+					},
+					"finishReason": finishReason,
+				},
 			},
-		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     geminiResp.UsageMetadata.PromptTokenCount,
-			"completion_tokens": geminiResp.UsageMetadata.CandidatesTokenCount,
-			"total_tokens":      geminiResp.UsageMetadata.TotalTokenCount,
-		},
-	}
-	return json.Marshal(resp)
-}
-
-// =============================================================================
-// 流式
-// =============================================================================
-
-func (p *GeminiProvider) copyGeminiStream(ctx context.Context, dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	reader := bufio.NewReader(src)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
+			"usageMetadata": map[string]interface{}{
+				"promptTokenCount":     resp.Usage.InputTokens,
+				"candidatesTokenCount": resp.Usage.OutputTokens,
+				"totalTokenCount":      resp.Usage.TotalTokens(),
+			},
 		}
-		fmt.Fprint(dst, line)
-		if flusher, ok := dst.(http.Flusher); ok {
-			flusher.Flush()
-		}
-	}
-	return nil
-}
-
-func (p *GeminiProvider) copyGeminiResponse(dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	body, err := io.ReadAll(src)
-	if err != nil {
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json")
+		body, _ := json.Marshal(geminiResp)
+		_, err := c.Writer.Write(body)
 		return err
 	}
-	dst.Write(body)
-	return nil
-}
 
-func (p *GeminiProvider) streamGeminiToOpenAI(ctx context.Context, src io.Reader, dst io.Writer, modelID string, usage *registry.Usage) error {
-	reader := bufio.NewReader(src)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
+	// 流式：Unified events → Gemini SSE
+	c.Status(http.StatusOK)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
 
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "data:") {
-			continue
-		}
-		data := strings.TrimPrefix(trimmed, "data:")
-		data = strings.TrimSpace(data)
-
-		var geminiChunk struct {
-			Candidates []struct {
-				Content struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
-				} `json:"content"`
-			} `json:"candidates"`
-			UsageMetadata *struct {
-				PromptTokenCount     int `json:"promptTokenCount"`
-				CandidatesTokenCount int `json:"candidatesTokenCount"`
-			} `json:"usageMetadata"`
-		}
-
-		if err := json.Unmarshal([]byte(data), &geminiChunk); err != nil {
-			continue
-		}
-
-		if geminiChunk.UsageMetadata != nil {
-			usage.InputTokens = geminiChunk.UsageMetadata.PromptTokenCount
-			usage.OutputTokens = geminiChunk.UsageMetadata.CandidatesTokenCount
-		}
-
-		if len(geminiChunk.Candidates) > 0 && len(geminiChunk.Candidates[0].Content.Parts) > 0 {
-			text := geminiChunk.Candidates[0].Content.Parts[0].Text
-			if text != "" {
+	var inputTokens, outputTokens int
+	for ev := range events {
+		switch ev.Type {
+		case unified.EventChunk:
+			if ev.Delta != nil && ev.Delta.Content != "" {
 				chunk := map[string]interface{}{
-					"object": "chat.completion.chunk",
-					"model":  modelID,
-					"choices": []map[string]interface{}{
+					"candidates": []map[string]interface{}{
 						{
-							"index": 0,
-							"delta": map[string]interface{}{"content": text},
+							"content": map[string]interface{}{
+								"role":  "model",
+								"parts": []map[string]interface{}{{"text": ev.Delta.Content}},
+							},
 						},
 					},
 				}
-				chunkJSON, _ := json.Marshal(chunk)
-				fmt.Fprintf(dst, "data: %s\n\n", chunkJSON)
-				if flusher, ok := dst.(http.Flusher); ok {
-					flusher.Flush()
-				}
+				data, _ := json.Marshal(chunk)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+				c.Writer.Flush()
 			}
+		case unified.EventUsage:
+			if ev.Usage != nil {
+				inputTokens = ev.Usage.InputTokens
+				outputTokens = ev.Usage.OutputTokens
+			}
+		case unified.EventDone:
+			finishReason := "STOP"
+			if ev.FinishReason == "length" {
+				finishReason = "MAX_TOKENS"
+			}
+			chunk := map[string]interface{}{
+				"candidates": []map[string]interface{}{
+					{
+						"content":      map[string]interface{}{"role": "model", "parts": []interface{}{}},
+						"finishReason": finishReason,
+					},
+				},
+				"usageMetadata": map[string]interface{}{
+					"promptTokenCount":     inputTokens,
+					"candidatesTokenCount": outputTokens,
+					"totalTokenCount":      inputTokens + outputTokens,
+				},
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			c.Writer.Flush()
 		}
 	}
+	usage.InputTokens = inputTokens
+	usage.OutputTokens = outputTokens
 	return nil
 }

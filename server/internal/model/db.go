@@ -189,13 +189,14 @@ type Key struct {
 	Key        string `gorm:"uniqueIndex"`
 	Name       string
 	Enabled    bool   `gorm:"type:boolean;default:true"`
-	AccessMode string `gorm:"type:varchar(50);default:'mapping'"` // "mapping", "direct", "hybrid"
+	AccessMode string `gorm:"type:varchar(50);default:'hybrid'"` // "mapping", "direct", "hybrid"
 
 	ExpiresAt *time.Time
 	CreatedAt time.Time
 	DeletedAt gorm.DeletedAt
 
 	Models       []KeyModel
+	Providers    []KeyProvider
 	MCPTools     []KeyMCPTool
 	MCPResources []KeyMCPResource
 	MCPPrompts   []KeyMCPPrompt
@@ -230,6 +231,36 @@ type KeyModel struct {
 
 func (KeyModel) TableName() string {
 	return "key_models"
+}
+
+type KeyProvider struct {
+	ID         uint `gorm:"primaryKey"`
+	KeyID      uint `gorm:"index;not null"`
+	ProviderID uint `gorm:"index;not null"`
+
+	CreatedAt time.Time
+	Provider  *Provider `gorm:"foreignKey:ProviderID"`
+}
+
+func (KeyProvider) TableName() string {
+	return "key_providers"
+}
+
+// KeyProviderModel API 密钥的"模型厂商直通"白名单（模型ID级别）。
+// 与 KeyProvider（厂商级别）不同，这里精确到具体的 ProviderModel，
+// 使得"直通模型ID"与"映射模型ID"可以在同一维度比较，避免重复。
+type KeyProviderModel struct {
+	ID              uint `gorm:"primaryKey"`
+	KeyID           uint `gorm:"index;not null;uniqueIndex:idx_key_provider_model"`
+	ProviderModelID uint `gorm:"index;not null;uniqueIndex:idx_key_provider_model"`
+
+	CreatedAt time.Time
+
+	ProviderModel *ProviderModel `gorm:"foreignKey:ProviderModelID"`
+}
+
+func (KeyProviderModel) TableName() string {
+	return "key_provider_models"
 }
 
 type KeyMCPTool struct {
@@ -444,6 +475,8 @@ func autoMigrate() error {
 		&Key{},
 		&KeyFormat{},
 		&KeyModel{},
+		&KeyProvider{},
+		&KeyProviderModel{},
 		&KeyMCPTool{},
 		&KeyMCPResource{},
 		&KeyMCPPrompt{},

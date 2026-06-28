@@ -13,13 +13,6 @@
       <el-table :data="keys" stripe v-loading="loading" @selection-change="handleSelectionChange" :default-sort="defaultSort" @sort-change="handleSortChange">
         <el-table-column type="selection" width="50" />
         <el-table-column prop="name" :label="t('key.name')" width="180" sortable />
-        <el-table-column :label="'访问模式'" width="160">
-          <template #default="{ row }">
-            <el-tag v-if="row.access_mode === 'mapping'" type="info">模型映射</el-tag>
-            <el-tag v-else-if="row.access_mode === 'direct'" type="success">厂商直连</el-tag>
-            <el-tag v-else type="warning">混合模式</el-tag>
-          </template>
-        </el-table-column>
         <el-table-column prop="key" :label="t('key.key')" width="240" />
         <el-table-column :label="t('key.model')" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
           <template #default="{ row }">
@@ -50,9 +43,10 @@
             <el-switch v-model="row.enabled" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column :label="t('common.action')" width="180">
+        <el-table-column :label="t('common.action')" width="240">
            <template #default="{ row }">
              <el-button link type="primary" @click="showDialog(row)">{{ t('common.edit') }}</el-button>
+             <el-button link type="warning" @click="handleUpdateKey(row)">更新密钥</el-button>
              <el-button link type="default" @click="goDetail(row.id)">{{ t('common.detail') }}</el-button>
              <el-button link type="danger" @click="handleDelete(row.id)">{{ t('common.delete') }}</el-button>
            </template>
@@ -65,13 +59,17 @@
          <el-form-item :label="t('key.name')" required>
            <el-input v-model="form.name" />
          </el-form-item>
-         <el-form-item :label="'访问模式'">
-           <el-radio-group v-model="form.access_mode">
-             <el-radio label="mapping">模型映射模式 (隐藏厂商模型)</el-radio>
-             <el-radio label="direct">直连厂商模式 (支持原生SDK)</el-radio>
-             <el-radio label="hybrid">混合双轨模式 (兼顾两者)</el-radio>
-           </el-radio-group>
+         <el-form-item :label="'密钥格式'" required>
+           <el-select v-model="form.format" placeholder="请选择模型厂商" style="width: 100%" :disabled="!!editingId">
+             <el-option
+               v-for="p in protocols"
+               :key="p.name"
+               :label="p.label"
+               :value="p.name"
+             />
+           </el-select>
          </el-form-item>
+
        </el-form>
        <template #footer>
          <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -79,8 +77,12 @@
        </template>
      </el-dialog>
 
-    <el-dialog v-model="keyDialogVisible" title="API Key">
-      <p>{{ t('key.key') }}:</p>
+    <el-dialog v-model="keyDialogVisible" title="密钥已更新">
+      <div v-if="oldKey" style="margin-bottom:12px">
+        <p style="color:#909399;font-size:13px">原密钥:</p>
+        <el-input :model-value="oldKey" readonly disabled />
+      </div>
+      <p>新密钥:</p>
       <el-input v-model="newKey" readonly>
         <template #append>
           <el-button @click="copyKey">Copy</el-button>
@@ -110,18 +112,22 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const keyDialogVisible = ref(false)
 const newKey = ref('')
+const oldKey = ref('')
 const editingId = ref<number | null>(null)
 const formRef = ref()
 const submitting = ref(false)
 const defaultSort = getSortConfig('keys', 'name')
+const protocols = ref<Array<{ name: string; label: string; key_prefix: string }>>([])
 
 const form = reactive({
   name: '',
-  access_mode: 'mapping'
+  access_mode: 'mapping',
+  format: ''
 })
 
 onMounted(() => {
   fetchKeys()
+  fetchProtocols()
 })
 
 async function fetchKeys() {
@@ -131,6 +137,15 @@ async function fetchKeys() {
     keys.value = res.data.keys || []
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchProtocols() {
+  try {
+    const res = await api.get('/protocols')
+    protocols.value = res.data.protocols || []
+  } catch (e) {
+    console.error('Failed to fetch protocols', e)
   }
 }
 
@@ -144,9 +159,12 @@ async function showDialog(key?: any) {
   if (key) {
     form.name = key.name || ''
     form.access_mode = key.access_mode || 'mapping'
+    // 编辑时仅修改名称，格式保持可选
+    form.format = ''
   } else {
     form.name = ''
     form.access_mode = 'mapping'
+    form.format = protocols.value.length > 0 ? protocols.value[0].name : ''
   }
   
   dialogVisible.value = true
@@ -156,12 +174,14 @@ async function handleSubmit() {
   submitting.value = true
   try {
     if (editingId.value) {
+      // 编辑模式：仅更新名称
       await api.put(`/keys/${editingId.value}`, { name: form.name, access_mode: form.access_mode })
       ElMessage.success(t('common.success'))
       dialogVisible.value = false
     } else {
-      const res = await api.post('/keys', { name: form.name, access_mode: form.access_mode })
+      const res = await api.post('/keys', { name: form.name, access_mode: form.access_mode, format: form.format })
       newKey.value = res.data.raw_key
+      oldKey.value = ''
       dialogVisible.value = false
       keyDialogVisible.value = true
     }
@@ -170,6 +190,30 @@ async function handleSubmit() {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
     submitting.value = false
+  }
+}
+
+// 更新密钥：直接调用reset接口生成新密钥
+async function handleUpdateKey(row: any) {
+  try {
+    await ElMessageBox.confirm(`确定要更新密钥【${row.key}】吗？更新后旧密钥将失效。`, '更新密钥', { type: 'warning' })
+    // 根据密钥前缀检测格式
+    let format = 'openai'
+    if (row.key && row.key.startsWith('AIza')) {
+      format = 'gemini'
+    } else if (row.key && row.key.startsWith('sk-ant-')) {
+      format = 'anthropic'
+    }
+    
+    const resetRes = await api.post(`/keys/${row.id}/reset`, { format })
+    oldKey.value = row.key  // 显示脱敏后的原密钥
+    newKey.value = resetRes.data.raw_key
+    keyDialogVisible.value = true
+    fetchKeys()
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error(e.response?.data?.error || t('common.error'))
+    }
   }
 }
 

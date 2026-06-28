@@ -13,11 +13,21 @@ import (
 
 	coreErrors "ai-gateway/internal/core/errors"
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/unified"
 	"ai-gateway/internal/model"
 	"ai-gateway/internal/router"
+	"ai-gateway/internal/utils"
 )
 
-// UnifiedGatewayHandler 统一网关代理（基于 Registry + 协议插件）
+// UnifiedGatewayHandler 统一网关代理（基于 Registry + Unified 中间表示）。
+//
+// 流程：
+//  1. 入口协议 ToUnified(body) → *unified.Request
+//  2. 路由选择上游 Provider + ProviderModel
+//  3. 上游协议 FromUnified(req) → unified.Response 或 <-chan unified.StreamEvent
+//  4. 入口协议 FormatUnified(resp/events) → 客户端格式
+//
+// 中间件本身永远不随协议数量变化；新增协议只需在 protocols/ 下新建文件夹。
 type UnifiedGatewayHandler struct {
 	modelRouter *router.ModelRouter
 }
@@ -32,15 +42,15 @@ func NewUnifiedGatewayHandler() *UnifiedGatewayHandler {
 func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	protocolName := c.Param("protocol")
 
-	// 1. 获取协议描述符
-	protoDesc, ok := registry.Get(protocolName)
+	// 1. 获取入口协议描述符
+	entryDesc, ok := registry.Get(protocolName)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "unsupported protocol: " + protocolName})
 		return
 	}
 
 	// 2. 提取并验证 API Key
-	rawKey := protoDesc.AuthExtractor(c)
+	rawKey := entryDesc.AuthExtractor(c)
 	if rawKey == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing API key"})
 		return
@@ -66,23 +76,24 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 3. 提取模型名
-	modelName := h.extractModel(c)
+	// 3. 读取请求体（ToUnified 需要）
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
+	// 4. 提取模型名
+	modelName := h.extractModel(c, body)
 	if modelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model identifier"})
 		return
 	}
 
-	// 4. 权限检查
-	if !h.checkModelAccess(apiKey.ID, modelName) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "model not allowed for this API key"})
-		return
-	}
-
-	// 5. 路由
-	result, routeErr := h.modelRouter.Route(modelName)
+	// 5. 路由（支持 mapping/direct/hybrid 三种 AccessMode）
+	result, isDirectCall, routeErr := h.route(apiKey, modelName)
 	if routeErr != nil {
-		coreErrors.Error("route failed for model=%s: %v", modelName, routeErr)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": routeErr.Error()})
 		return
 	}
@@ -91,7 +102,30 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 6. 保存上下文
+	// 5.1 重复检查（双保险）：该 key 的直通白名单与映射白名单不应有相同 model_id
+	if conflict := h.checkKeyConflict(apiKey.ID); conflict != "" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "API key has model ID conflict: " + conflict})
+		return
+	}
+
+	// 6. 权限检查（mapping 模式下校验 key_models）
+	if !isDirectCall {
+		if err := h.verifyKeyID(apiKey.ID, modelName); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	// 7. 入口协议 ToUnified
+	entryProv := entryDesc.NewProvider(&registry.Config{})
+	unifiedReq, err := entryProv.ToUnified(body, result.ProviderModel.ModelID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parse request: " + err.Error()})
+		return
+	}
+	unifiedReq.SourceProtocol = protocolName
+
+	// 8. 选择上游协议并执行
 	c.Set("key_id", apiKey.ID)
 	c.Set("key_name", apiKey.Name)
 
@@ -103,49 +137,135 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 
 	start := time.Now()
 	usage := registry.Usage{}
-
-	// 7. 执行请求
-	upstreamProtocol, execErr := h.execute(c, protocolName, result, &usage)
+	upstreamProtocol, execErr := h.execute(c, unifiedReq, result, &usage)
 
 	c.Request.URL.Path = originalPath
 	latencyMs := time.Since(start).Milliseconds()
 
-	// 8. 日志
+	// 9. 冷却管理
 	status := "success"
 	errMsg := ""
 	if execErr != nil {
 		status = "error"
 		errMsg = execErr.Error()
+		if httpErr, ok := execErr.(*registry.HTTPError); ok && httpErr.IsRateLimit() {
+			h.modelRouter.RecordRateLimit(result.Provider.ID, result.ProviderModel.ID)
+		}
 		coreErrors.Error("gateway error: %s | %s %s | model=%s→%s | %dms",
 			errMsg, c.Request.Method, originalPath,
 			modelName, upstreamProtocol, latencyMs)
+	} else {
+		h.modelRouter.RecordSuccess(result.Provider.ID, result.ProviderModel.ID)
 	}
 
-	h.logUsage(protocolName, apiKey.ID, apiKey.Name, modelName, result,
-		upstreamProtocol, &usage, int(latencyMs), status, errMsg)
+	// 10. 日志
+	matched := upstreamProtocol == protocolName
+	clientIPs := utils.GetClientIPInfo(c)
+	modelLog := h.newModelLog(
+		protocolName, clientIPs, apiKey.ID, apiKey.Name, modelName,
+		result, matched, &usage, int(latencyMs), status, errMsg,
+	)
+	model.DB.Create(modelLog)
+
+	if status == "success" {
+		coreErrors.Info("%s %s → %s | %s | %dt %dms",
+			protocolName, modelName, upstreamProtocol,
+			classifyCall(matched, isDirectCall), usage.TotalTokens(), latencyMs)
+	}
 }
 
-// execute 执行请求，返回使用的上游协议
-func (h *UnifiedGatewayHandler) execute(c *gin.Context, entryProtocol string,
+func classifyCall(matched, isDirect bool) string {
+	if isDirect {
+		return "direct"
+	}
+	if !matched {
+		return "convert"
+	}
+	return "direct"
+}
+
+// route 根据 AccessMode 选择路由方式
+func (h *UnifiedGatewayHandler) route(apiKey model.Key, modelName string) (*router.RouteResult, bool, error) {
+	// direct / hybrid 模式先尝试直通
+	if apiKey.AccessMode == "direct" || apiKey.AccessMode == "hybrid" {
+		directResult, err := h.modelRouter.RouteDirect(modelName, apiKey.ID)
+		if err == nil && directResult != nil {
+			return directResult, true, nil
+		}
+	}
+
+	if apiKey.AccessMode == "direct" {
+		return nil, false, fmt.Errorf("direct model not found: %s", modelName)
+	}
+
+	// mapping 模式
+	mappedResult, err := h.modelRouter.Route(modelName)
+	if err != nil {
+		return nil, false, err
+	}
+	return mappedResult, false, nil
+}
+
+// checkKeyConflict 检查该 key 的直通白名单与映射白名单是否有 model_id 重复。
+// 返回非空字符串表示有冲突（含冲突的 model_id 列表）。
+func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
+	// 直通白名单中的 model_id 集合
+	var directPMIDs []uint
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &directPMIDs)
+	if len(directPMIDs) == 0 {
+		return ""
+	}
+	var directModelIDs []string
+	model.DB.Model(&model.ProviderModel{}).Where("id IN ?", directPMIDs).Pluck("model_id", &directModelIDs)
+	if len(directModelIDs) == 0 {
+		return ""
+	}
+
+	// 映射白名单中的虚拟模型名集合
+	var mappingModelIDs []uint
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Pluck("model_id", &mappingModelIDs)
+	if len(mappingModelIDs) == 0 {
+		return ""
+	}
+	var mappingNames []string
+	model.DB.Model(&model.Model{}).Where("id IN ?", mappingModelIDs).Pluck("name", &mappingNames)
+	if len(mappingNames) == 0 {
+		return ""
+	}
+
+	// 求交集
+	directSet := make(map[string]bool)
+	for _, id := range directModelIDs {
+		directSet[id] = true
+	}
+	var conflicts []string
+	for _, name := range mappingNames {
+		if directSet[name] {
+			conflicts = append(conflicts, name)
+		}
+	}
+	if len(conflicts) > 0 {
+		return strings.Join(conflicts, ", ")
+	}
+	return ""
+}
+
+// execute 执行 Unified 请求，返回使用的上游协议名
+func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 	result *router.RouteResult, usage *registry.Usage) (string, error) {
 
+	// 选择上游协议：优先同协议直通，否则任选一个支持的协议
 	providerProtos := result.GetProviderProtocols()
 	if len(providerProtos) == 0 {
 		return "", fmt.Errorf("no protocol configured for provider")
 	}
 
-	// 同协议直通优先
 	upstreamProto := ""
 	for _, p := range providerProtos {
-		if p == entryProtocol {
+		if p == req.SourceProtocol {
 			upstreamProto = p
 			break
 		}
-	}
-
-	// 策略 A：非同协议且非 OpenAI 入口 → 拒绝
-	if upstreamProto == "" && entryProtocol != "openai" {
-		return "", fmt.Errorf("cross-protocol not supported from %s; use OpenAI endpoint", entryProtocol)
 	}
 	if upstreamProto == "" {
 		upstreamProto = providerProtos[0]
@@ -153,7 +273,7 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, entryProtocol string,
 
 	upDesc, ok := registry.Get(upstreamProto)
 	if !ok {
-		return upstreamProto, fmt.Errorf("unsupported protocol: %s", upstreamProto)
+		return upstreamProto, fmt.Errorf("unsupported upstream protocol: %s", upstreamProto)
 	}
 
 	baseURL := h.getBaseURL(result.Provider, upstreamProto)
@@ -161,50 +281,44 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, entryProtocol string,
 		return upstreamProto, fmt.Errorf("no base URL for protocol %s", upstreamProto)
 	}
 
-	prov := upDesc.NewProvider(&registry.Config{
+	upProv := upDesc.NewProvider(&registry.Config{
 		BaseURL: baseURL,
 		APIKey:  result.Provider.APIKey,
 	})
 
-	if entryProtocol == upstreamProto {
-		return upstreamProto, prov.HandleNative(c, result.ProviderModel.ModelID, usage)
+	// 上游执行：Unified → 上游格式 → 发请求 → Unified 响应/流
+	resp, events, err := upProv.FromUnified(req)
+	if err != nil {
+		// 上游错误直接透传给客户端
+		if httpErr, ok := err.(*registry.HTTPError); ok {
+			c.Status(httpErr.StatusCode)
+			c.Header("Content-Type", "application/json")
+			c.Writer.Write(httpErr.Body)
+		}
+		return upstreamProto, err
 	}
-	return upstreamProto, prov.FromOpenAI(c, result.ProviderModel.ModelID, usage)
+
+	// 用入口协议把 Unified 响应/流格式化为客户端格式
+	entryDesc, _ := registry.Get(req.SourceProtocol)
+	entryProv := entryDesc.NewProvider(&registry.Config{})
+	return upstreamProto, entryProv.FormatUnified(resp, events, c, usage)
 }
 
 // extractModel 从请求中提取模型名
-func (h *UnifiedGatewayHandler) extractModel(c *gin.Context) string {
-	body, err := io.ReadAll(c.Request.Body)
-	if err == nil {
-		c.Request.Body = io.NopCloser(bytes.NewReader(body))
-		var req map[string]interface{}
-		if json.Unmarshal(body, &req) == nil {
-			if m, ok := req["model"].(string); ok && m != "" {
-				return m
-			}
+func (h *UnifiedGatewayHandler) extractModel(c *gin.Context, body []byte) string {
+	// 优先从 body 的 model 字段提取
+	var req map[string]interface{}
+	if json.Unmarshal(body, &req) == nil {
+		if m, ok := req["model"].(string); ok && m != "" {
+			return m
 		}
 	}
-	// Gemini 风格 URL 提取
+	// Gemini 风格 URL 提取: /models/{id}:generateContent
 	path := c.Request.URL.Path
 	if parts := strings.Split(path, "/models/"); len(parts) >= 2 {
 		return strings.Split(parts[1], ":")[0]
 	}
 	return ""
-}
-
-func (h *UnifiedGatewayHandler) checkModelAccess(keyID uint, modelName string) bool {
-	var count int64
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Count(&count)
-	if count == 0 {
-		return true
-	}
-	var m model.Model
-	if err := model.DB.Where("name = ?", modelName).First(&m).Error; err != nil {
-		return false
-	}
-	var modelCount int64
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND model_id = ?", keyID, m.ID).Count(&modelCount)
-	return modelCount > 0
 }
 
 func (h *UnifiedGatewayHandler) getBaseURL(p *model.Provider, protocol string) string {
@@ -227,27 +341,48 @@ func (h *UnifiedGatewayHandler) getBaseURL(p *model.Provider, protocol string) s
 	return ""
 }
 
-func (h *UnifiedGatewayHandler) logUsage(source string, keyID uint, keyName, modelName string,
-	result *router.RouteResult, upstreamProto string, usage *registry.Usage,
-	latencyMs int, status, errMsg string) {
+// verifyKeyID 校验 key 是否有权访问指定虚拟模型（key_models 为空表示全部允许）
+func (h *UnifiedGatewayHandler) verifyKeyID(keyID uint, modelName string) error {
+	var count int64
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Count(&count)
+	if count == 0 {
+		return nil
+	}
+	var m model.Model
+	if err := model.DB.Where("name = ?", modelName).First(&m).Error; err != nil {
+		return fmt.Errorf("model not allowed for this API key")
+	}
+	var modelCount int64
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND model_id = ?", keyID, m.ID).Count(&modelCount)
+	if modelCount == 0 {
+		return fmt.Errorf("model not allowed for this API key")
+	}
+	return nil
+}
 
-	displayName := result.ProviderModel.DisplayName
-	if displayName == "" {
-		displayName = result.ProviderModel.ModelID
+// newModelLog 构造模型调用日志
+func (h *UnifiedGatewayHandler) newModelLog(source, clientIPs string, keyID uint, keyName, modelName string,
+	result *router.RouteResult, matched bool, usage *registry.Usage,
+	latencyMs int, status, errMsg string) *model.ModelLog {
+
+	actualModelName := result.ProviderModel.DisplayName
+	if actualModelName == "" {
+		actualModelName = result.ProviderModel.ModelID
 	}
 	callMethod := "direct"
-	if source != upstreamProto {
+	if !matched {
 		callMethod = "convert"
 	}
-	mlog := model.ModelLog{
+	return &model.ModelLog{
 		Source:          source,
+		ClientIPs:       clientIPs,
 		KeyID:           keyID,
 		KeyName:         keyName,
 		Model:           modelName,
 		ProviderID:      result.Provider.ID,
 		ProviderName:    result.Provider.Name,
 		ActualModelID:   result.ProviderModel.ModelID,
-		ActualModelName: displayName,
+		ActualModelName: actualModelName,
 		CallMethod:      callMethod,
 		CachedTokens:    usage.CachedTokens,
 		InputTokens:     usage.InputTokens,
@@ -256,12 +391,5 @@ func (h *UnifiedGatewayHandler) logUsage(source string, keyID uint, keyName, mod
 		LatencyMs:       latencyMs,
 		Status:          status,
 		ErrorMsg:        errMsg,
-	}
-	model.DB.Create(&mlog)
-
-	// 终端日志
-	if status == "success" {
-		coreErrors.Info("%s %s → %s | %s | %dt %dms",
-			source, modelName, upstreamProto, callMethod, usage.TotalTokens(), latencyMs)
 	}
 }

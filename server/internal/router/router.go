@@ -2,7 +2,6 @@ package router
 
 import (
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/provider"
 )
 
 var globalRouter = &ModelRouter{
@@ -52,16 +51,9 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 
 		pm := mapping.ProviderModel
 
-		providerImpl := provider.NewAutomatedProvider(
-			providerInfo.OpenAIBaseURL,
-			providerInfo.AnthropicBaseURL,
-			providerInfo.GeminiBaseURL,
-			providerInfo.APIKey,
-		)
 		result := RouteResult{
-			Provider:         providerInfo,
-			ProviderModel:    pm,
-			ProviderInstance: providerImpl,
+			Provider:      providerInfo,
+			ProviderModel: pm,
 		}
 		allProviders = append(allProviders, result)
 
@@ -85,13 +77,25 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 	return nil, nil
 }
 
-func (r *ModelRouter) RouteDirect(modelID string) (*RouteResult, error) {
+// RouteDirect 直通路由：按 provider_models.model_id 匹配。
+// 如果 keyID > 0 且该 key 有 key_provider_models 白名单，则只允许白名单内的模型。
+func (r *ModelRouter) RouteDirect(modelID string, keyID uint) (*RouteResult, error) {
 	r.cooldownManager.ClearExpiredCooldowns()
 
+	// 查询该 key 的直通白名单
+	var allowedPMIDs []uint
+	if keyID > 0 {
+		model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &allowedPMIDs)
+	}
+
+	query := model.DB.Preload("Provider").
+		Where("model_id = ? AND is_available = ?", modelID, true)
+	if len(allowedPMIDs) > 0 {
+		query = query.Where("id IN ?", allowedPMIDs)
+	}
+
 	var pms []model.ProviderModel
-	if err := model.DB.Preload("Provider").
-		Where("model_id = ? AND is_available = ?", modelID, true).
-		Find(&pms).Error; err != nil {
+	if err := query.Find(&pms).Error; err != nil {
 		return nil, err
 	}
 
@@ -109,16 +113,9 @@ func (r *ModelRouter) RouteDirect(modelID string) (*RouteResult, error) {
 		}
 
 		pmCopy := pm
-		providerImpl := provider.NewAutomatedProvider(
-			providerInfo.OpenAIBaseURL,
-			providerInfo.AnthropicBaseURL,
-			providerInfo.GeminiBaseURL,
-			providerInfo.APIKey,
-		)
 		result := RouteResult{
-			Provider:         providerInfo,
-			ProviderModel:    &pmCopy,
-			ProviderInstance: providerImpl,
+			Provider:      providerInfo,
+			ProviderModel: &pmCopy,
 		}
 		allProviders = append(allProviders, result)
 

@@ -3,7 +3,6 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/unified"
 )
 
 type AnthropicProvider struct {
@@ -74,7 +74,6 @@ func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderMode
 			ModelID:        m.ID,
 			DisplayName:    displayName,
 			OwnedBy:        "anthropic",
-			SupportsVision: false,
 			SupportsTools:  true,
 			SupportsStream: true,
 			IsAvailable:    true,
@@ -85,256 +84,338 @@ func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderMode
 }
 
 // =============================================================================
-// HandleNative — Anthropic 直通（只替换模型名）
+// ToUnified — Anthropic 请求 → UnifiedRequest
 // =============================================================================
 
-func (p *AnthropicProvider) HandleNative(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	body, err := io.ReadAll(ctx.Request.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
+func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Request, error) {
+	var raw struct {
+		Model       string            `json:"model"`
+		MaxTokens   int               `json:"max_tokens"`
+		System      json.RawMessage   `json:"system,omitempty"`
+		Messages    []json.RawMessage `json:"messages"`
+		Tools       json.RawMessage   `json:"tools,omitempty"`
+		Stream      bool              `json:"stream,omitempty"`
+		Temperature *float64          `json:"temperature,omitempty"`
+		TopP        *float64          `json:"top_p,omitempty"`
+		Stop        []string          `json:"stop_sequences,omitempty"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse anthropic body: %w", err)
 	}
 
-	var bodyMap map[string]interface{}
-	if err := json.Unmarshal(body, &bodyMap); err != nil {
-		return fmt.Errorf("parse body: %w", err)
-	}
-	bodyMap["model"] = modelID
-	body, _ = json.Marshal(bodyMap)
-
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), "POST",
-		p.cfg.BaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("x-api-key", p.cfg.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		ctx.Status(resp.StatusCode)
-		ctx.Writer.Write(respBody)
-		return fmt.Errorf("Anthropic API error (status %d): %s", resp.StatusCode, string(respBody))
+	// 解析 system（可能是 string 或 content blocks）
+	systemPrompt := ""
+	if len(raw.System) > 0 {
+		var s string
+		if json.Unmarshal(raw.System, &s) == nil {
+			systemPrompt = s
+		} else {
+			var blocks []unified.ContentBlock
+			if json.Unmarshal(raw.System, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" {
+						systemPrompt += b.Text
+					}
+				}
+			}
+		}
 	}
 
-	if p.isStreaming(resp) {
-		ctx.Status(http.StatusOK)
-		ctx.Header("Content-Type", "text/event-stream")
-		ctx.Header("Cache-Control", "no-cache")
-		ctx.Header("Connection", "keep-alive")
-		return p.copyAnthropicStream(ctx.Request.Context(), ctx.Writer, resp.Body, usage)
-	}
+	// 转换 messages
+	msgs := make([]unified.Message, 0, len(raw.Messages))
+	for _, rawMsg := range raw.Messages {
+		var m struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(rawMsg, &m); err != nil {
+			return nil, fmt.Errorf("parse anthropic message: %w", err)
+		}
+		um := unified.Message{Role: m.Role}
 
-	ctx.Status(http.StatusOK)
-	ctx.Header("Content-Type", "application/json")
-	return p.copyAnthropicResponse(ctx.Writer, resp.Body, usage)
-}
-
-// =============================================================================
-// FromOpenAI — OpenAI 请求 → Anthropic 格式，发上游，响应转回 OpenAI
-// =============================================================================
-
-type openaiChatRequest struct {
-	Model     string                   `json:"model"`
-	Messages  []map[string]interface{} `json:"messages"`
-	MaxTokens int                      `json:"max_tokens"`
-	Tools     json.RawMessage          `json:"tools,omitempty"`
-	Stream    bool                     `json:"stream"`
-	StreamOptions *struct{}            `json:"stream_options,omitempty"`
-}
-
-type anthropicRequest struct {
-	Model     string                   `json:"model"`
-	MaxTokens int                      `json:"max_tokens"`
-	System    interface{}              `json:"system,omitempty"`
-	Messages  []map[string]interface{} `json:"messages"`
-	Stream    bool                     `json:"stream,omitempty"`
-}
-
-func (p *AnthropicProvider) FromOpenAI(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	body, err := io.ReadAll(ctx.Request.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
-	}
-
-	var openAIReq openaiChatRequest
-	if err := json.Unmarshal(body, &openAIReq); err != nil {
-		return fmt.Errorf("parse body: %w", err)
-	}
-
-	// 转换：OpenAI messages → Anthropic messages
-	anthropicReq := p.convertOpenAIToAnthropic(openAIReq, modelID)
-
-	anthropicBody, _ := json.Marshal(anthropicReq)
-
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), "POST",
-		p.cfg.BaseURL+"/v1/messages", bytes.NewReader(anthropicBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("x-api-key", p.cfg.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		ctx.Status(resp.StatusCode)
-		ctx.Writer.Write(respBody)
-		return fmt.Errorf("Anthropic API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if openAIReq.Stream {
-		ctx.Status(http.StatusOK)
-		ctx.Header("Content-Type", "text/event-stream")
-		ctx.Header("Cache-Control", "no-cache")
-		ctx.Header("Connection", "keep-alive")
-		return p.streamAnthropicToOpenAI(ctx.Request.Context(), resp.Body, ctx.Writer, modelID, usage)
-	}
-
-	body, _ = io.ReadAll(resp.Body)
-	openAIResp, err := p.convertAnthropicResponseToOpenAI(body, modelID, usage)
-	if err != nil {
-		return err
-	}
-	ctx.Status(http.StatusOK)
-	ctx.Header("Content-Type", "application/json")
-	ctx.Writer.Write(openAIResp)
-	return nil
-}
-
-// =============================================================================
-// 转换逻辑：OpenAI → Anthropic
-// =============================================================================
-
-func (p *AnthropicProvider) convertOpenAIToAnthropic(req openaiChatRequest, modelID string) anthropicRequest {
-	anthropicMsgs := make([]map[string]interface{}, 0)
-	var systemContent interface{}
-
-	for _, msg := range req.Messages {
-		role, _ := msg["role"].(string)
-		content := msg["content"]
-
-		if role == "system" {
-			systemContent = content
+		// Anthropic content 可能是 string 或 content blocks
+		// 统一转为 OpenAI 风格：assistant 的 tool_use → tool_calls，user 的 tool_result → tool role
+		var s string
+		if json.Unmarshal(m.Content, &s) == nil {
+			um.Content = unified.StringContent(s)
+			msgs = append(msgs, um)
 			continue
 		}
 
-		// 转换 assistant 消息中的 tool_calls → Anthropic 格式
-		anthropicRole := role
-
-		newMsg := map[string]interface{}{"role": anthropicRole}
-
-		switch v := content.(type) {
-		case string:
-			newMsg["content"] = v
-		case []interface{}:
-			// 已经是 content blocks 格式
-			newMsg["content"] = v
-		default:
-			newMsg["content"] = fmt.Sprintf("%v", v)
+		var blocks []unified.ContentBlock
+		if json.Unmarshal(m.Content, &blocks) != nil {
+			um.Content = m.Content
+			msgs = append(msgs, um)
+			continue
 		}
 
-		// 处理 tool_calls
-		if role == "assistant" {
-			if toolCalls, ok := msg["tool_calls"]; ok {
-				blocks := make([]map[string]interface{}, 0)
-				if existingBlocks, ok := content.([]interface{}); ok {
-					for _, b := range existingBlocks {
-						if block, ok := b.(map[string]interface{}); ok {
-							blocks = append(blocks, block)
-						}
-					}
-				}
-				if tcArr, ok := toolCalls.([]interface{}); ok {
-					for _, tc := range tcArr {
-						if tcMap, ok := tc.(map[string]interface{}); ok {
-							tcType := "function"
-							if t, _ := tcMap["type"].(string); t != "" {
-								tcType = t
-							}
-							block := map[string]interface{}{"type": "tool_use"}
-							if fn, ok := tcMap["function"]; ok {
-								block["name"] = fn.(map[string]interface{})["name"]
-								if args, ok := fn.(map[string]interface{})["arguments"]; ok {
-									var parsed interface{}
-									if err := json.Unmarshal([]byte(args.(string)), &parsed); err == nil {
-										block["input"] = parsed
-									} else {
-										block["input"] = args
-									}
-								}
-							}
-							if id, ok := tcMap["id"]; ok {
-								block["id"] = id
-							}
-							// 类型字段
-							if tcType == "function" {
-								block["type"] = "tool_use"
-							} else {
-								block["type"] = tcType
-							}
-							blocks = append(blocks, block)
-						}
-					}
-				}
-				newMsg["content"] = blocks
-			}
-		}
-
-		// 处理 tool 角色
-		if role == "tool" {
-			if toolCallID, ok := msg["tool_call_id"]; ok {
-				newMsg["content"] = []map[string]interface{}{
-					{
-						"type":      "tool_result",
-						"tool_use_id": toolCallID,
-						"content":   content,
+		// 分离 tool_use / tool_result / text / image
+		textParts := make([]string, 0)
+		var toolCalls []unified.ToolCall
+		var toolResults []unified.Message
+		for _, b := range blocks {
+			switch b.Type {
+			case "text":
+				textParts = append(textParts, b.Text)
+			case "image":
+				// 保留为 image block
+			case "tool_use":
+				args, _ := json.Marshal(b.Input)
+				toolCalls = append(toolCalls, unified.ToolCall{
+					ID:   b.ID,
+					Type: "function",
+					Function: unified.FunctionCall{
+						Name:      b.Name,
+						Arguments: string(args),
 					},
-				}
+				})
+			case "tool_result":
+				// tool_result 转为独立的 tool role 消息
+				toolResults = append(toolResults, unified.Message{
+					Role:       "tool",
+					ToolCallID: b.ToolUseID,
+					Content:    b.Content,
+				})
 			}
 		}
 
-		anthropicMsgs = append(anthropicMsgs, newMsg)
+		if len(textParts) > 0 {
+			um.Content = unified.StringContent(strings.Join(textParts, "\n"))
+		}
+		if len(toolCalls) > 0 {
+			um.ToolCalls = toolCalls
+		}
+		msgs = append(msgs, um)
+		msgs = append(msgs, toolResults...)
 	}
 
-	result := anthropicRequest{
-		Model:     modelID,
-		MaxTokens: req.MaxTokens,
-		System:    systemContent,
-		Messages:  anthropicMsgs,
-		Stream:    req.Stream,
+	req := &unified.Request{
+		Model:          modelID,
+		Messages:       msgs,
+		SystemPrompt:   systemPrompt,
+		MaxTokens:      raw.MaxTokens,
+		Temperature:    raw.Temperature,
+		TopP:           raw.TopP,
+		Stream:         raw.Stream,
+		Stop:           raw.Stop,
+		SourceProtocol: "anthropic",
 	}
-	if result.MaxTokens == 0 {
-		result.MaxTokens = 4096
+	if len(raw.Tools) > 0 {
+		var tools []unified.Tool
+		if err := json.Unmarshal(raw.Tools, &tools); err == nil {
+			req.Tools = tools
+		}
+	}
+	return req, nil
+}
+
+// =============================================================================
+// FromUnified — UnifiedRequest → Anthropic 请求，发上游，返回统一响应
+// =============================================================================
+
+func (p *AnthropicProvider) FromUnified(req *unified.Request) (*unified.Response, <-chan unified.StreamEvent, error) {
+	anthropicReq := p.unifiedToAnthropic(req)
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	httpReq, err := http.NewRequest("POST", p.cfg.BaseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("x-api-key", p.cfg.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, nil, &registry.HTTPError{StatusCode: resp.StatusCode, Body: respBody}
+	}
+
+	if req.Stream {
+		events := p.streamAnthropicToUnified(resp.Body)
+		return nil, events, nil
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	uresp, err := p.parseAnthropicResponse(respBody)
+	return uresp, nil, err
+}
+
+// unifiedToAnthropic 将 UnifiedRequest 转为 Anthropic 请求体
+func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]interface{} {
+	anthropicMsgs := make([]map[string]interface{}, 0, len(req.Messages))
+
+	for _, m := range req.Messages {
+		if m.Role == "system" {
+			continue // system 走顶层字段
+		}
+
+		if m.Role == "tool" {
+			// OpenAI tool role → Anthropic user message with tool_result block
+			anthropicMsgs = append(anthropicMsgs, map[string]interface{}{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{
+						"type":        "tool_result",
+						"tool_use_id": m.ToolCallID,
+						"content":     unified.ContentString(m.Content),
+					},
+				},
+			})
+			continue
+		}
+
+		// user / assistant
+		blocks := p.unifiedContentToAnthropicBlocks(m)
+		msg := map[string]interface{}{
+			"role":    m.Role,
+			"content": blocks,
+		}
+		// assistant 的 tool_calls → tool_use blocks
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				var input interface{}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+					input = tc.Function.Arguments
+				}
+				blocks = append(blocks, map[string]interface{}{
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
+					"input": input,
+				})
+			}
+			msg["content"] = blocks
+		}
+		anthropicMsgs = append(anthropicMsgs, msg)
+	}
+
+	result := map[string]interface{}{
+		"model":      req.Model,
+		"max_tokens": req.MaxTokens,
+		"messages":   anthropicMsgs,
+		"stream":     req.Stream,
+	}
+	if req.MaxTokens == 0 {
+		result["max_tokens"] = 4096
+	}
+	if req.SystemPrompt != "" {
+		result["system"] = req.SystemPrompt
+	}
+	if req.Temperature != nil {
+		result["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		result["top_p"] = *req.TopP
+	}
+	if len(req.Stop) > 0 {
+		result["stop_sequences"] = req.Stop
+	}
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]interface{}, 0, len(req.Tools))
+		for _, t := range req.Tools {
+			tools = append(tools, map[string]interface{}{
+				"name":         t.Function.Name,
+				"description":  t.Function.Description,
+				"input_schema": t.Function.Parameters,
+			})
+		}
+		result["tools"] = tools
 	}
 	return result
 }
 
+// unifiedContentToAnthropicBlocks 将 Unified Message content 转为 Anthropic content blocks
+func (p *AnthropicProvider) unifiedContentToAnthropicBlocks(m unified.Message) []map[string]interface{} {
+	blocks := make([]map[string]interface{}, 0)
+
+	// string content
+	if s := unified.ContentString(m.Content); s != "" {
+		blocks = append(blocks, map[string]interface{}{
+			"type": "text",
+			"text": s,
+		})
+		return blocks
+	}
+
+	// content blocks
+	for _, b := range unified.ContentBlocks(m.Content) {
+		switch b.Type {
+		case "text":
+			blocks = append(blocks, map[string]interface{}{
+				"type": "text",
+				"text": b.Text,
+			})
+		case "image_url":
+			if b.ImageURL != nil {
+				url := b.ImageURL.URL
+				if strings.HasPrefix(url, "data:") {
+					mediaType, data := parseDataURL(url)
+					blocks = append(blocks, map[string]interface{}{
+						"type": "image",
+						"source": map[string]interface{}{
+							"type":       "base64",
+							"media_type": mediaType,
+							"data":       data,
+						},
+					})
+				} else {
+					blocks = append(blocks, map[string]interface{}{
+						"type": "image",
+						"source": map[string]interface{}{
+							"type": "url",
+							"url":  url,
+						},
+					})
+				}
+			}
+		}
+	}
+
+	if len(blocks) == 0 {
+		blocks = append(blocks, map[string]interface{}{"type": "text", "text": ""})
+	}
+	return blocks
+}
+
+func parseDataURL(url string) (mediaType, data string) {
+	// data:image/jpeg;base64,xxxx
+	if idx := strings.Index(url, ";"); idx > 0 {
+		mediaType = strings.TrimPrefix(url[:idx], "data:")
+		if comma := strings.Index(url, ","); comma > 0 {
+			data = url[comma+1:]
+		}
+	}
+	return
+}
+
 // =============================================================================
-// 响应转换：Anthropic → OpenAI（非流式）
+// 解析 Anthropic 响应 → UnifiedResponse
 // =============================================================================
 
-func (p *AnthropicProvider) convertAnthropicResponseToOpenAI(body []byte, modelID string, usage *registry.Usage) ([]byte, error) {
-	var anthroResp struct {
+func (p *AnthropicProvider) parseAnthropicResponse(body []byte) (*unified.Response, error) {
+	var raw struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -342,200 +423,280 @@ func (p *AnthropicProvider) convertAnthropicResponseToOpenAI(body []byte, modelI
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(body, &anthroResp); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
 
-	usage.InputTokens = anthroResp.Usage.InputTokens
-	usage.OutputTokens = anthroResp.Usage.OutputTokens
-
-	combined := ""
-	for _, c := range anthroResp.Content {
-		if c.Type == "text" {
-			combined += c.Text
-		}
-	}
-
-	finishReason := "stop"
-	if anthroResp.StopReason == "max_tokens" {
-		finishReason = "length"
-	} else if anthroResp.StopReason == "tool_use" {
-		finishReason = "tool_calls"
-	}
-
-	resp := map[string]interface{}{
-		"id":      anthroResp.ID,
-		"object":  "chat.completion",
-		"model":   modelID,
-		"choices": []map[string]interface{}{
-			{
-				"index":         0,
-				"message":       map[string]interface{}{"role": "assistant", "content": combined},
-				"finish_reason": finishReason,
-			},
-		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":      anthroResp.Usage.InputTokens,
-			"completion_tokens":  anthroResp.Usage.OutputTokens,
-			"total_tokens":       anthroResp.Usage.InputTokens + anthroResp.Usage.OutputTokens,
+	uresp := &unified.Response{
+		ID:    raw.ID,
+		Model: raw.Model,
+		Usage: unified.Usage{
+			InputTokens:  raw.Usage.InputTokens,
+			OutputTokens: raw.Usage.OutputTokens,
 		},
 	}
-	return json.Marshal(resp)
-}
 
-// =============================================================================
-// SSE 流式处理
-// =============================================================================
-
-type anthropicUsageRaw struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-}
-
-func (u anthropicUsageRaw) toUsage(usage *registry.Usage) {
-	usage.InputTokens = u.InputTokens
-	usage.OutputTokens = u.OutputTokens
-}
-
-func (p *AnthropicProvider) isStreaming(resp *http.Response) bool {
-	contentType := resp.Header.Get("Content-Type")
-	return len(resp.Header["Transfer-Encoding"]) > 0 ||
-		(len(contentType) >= 17 && contentType[:17] == "text/event-stream")
-}
-
-func (p *AnthropicProvider) copyAnthropicStream(ctx context.Context, dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	reader := bufio.NewReader(src)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		if _, err := fmt.Fprint(dst, line); err != nil {
-			return err
-		}
-		if flusher, ok := dst.(http.Flusher); ok {
-			flusher.Flush()
-		}
-
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
-
-		var event struct {
-			Type  string             `json:"type"`
-			Usage anthropicUsageRaw  `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err == nil {
-			if event.Type == "message_delta" {
-				event.Usage.toUsage(usage)
-			}
+	var textContent string
+	var toolCalls []unified.ToolCall
+	for _, c := range raw.Content {
+		switch c.Type {
+		case "text":
+			textContent += c.Text
+		case "tool_use":
+			args, _ := json.Marshal(c.Input)
+			toolCalls = append(toolCalls, unified.ToolCall{
+				ID:   c.ID,
+				Type: "function",
+				Function: unified.FunctionCall{
+					Name:      c.Name,
+					Arguments: string(args),
+				},
+			})
 		}
 	}
-	return nil
-}
+	uresp.Content = textContent
+	uresp.ToolCalls = toolCalls
 
-func (p *AnthropicProvider) copyAnthropicResponse(dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	body, err := io.ReadAll(src)
-	if err != nil {
-		return err
+	switch raw.StopReason {
+	case "max_tokens":
+		uresp.FinishReason = "length"
+	case "tool_use":
+		uresp.FinishReason = "tool_calls"
+	default:
+		uresp.FinishReason = "stop"
 	}
-	dst.Write(body)
-
-	var resp struct {
-		Usage anthropicUsageRaw `json:"usage"`
-	}
-	json.Unmarshal(body, &resp)
-	resp.Usage.toUsage(usage)
-	return nil
+	return uresp, nil
 }
 
 // =============================================================================
-// 流式响应转换：Anthropic SSE → OpenAI SSE
+// 流式：Anthropic SSE → unified.StreamEvent chan
 // =============================================================================
 
-func (p *AnthropicProvider) streamAnthropicToOpenAI(ctx context.Context, src io.Reader, dst io.Writer, modelID string, usage *registry.Usage) error {
-	reader := bufio.NewReader(src)
-	var textBuilder strings.Builder
-	var deltaID string
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "data:") {
-			continue
-		}
-		data := strings.TrimPrefix(trimmed, "data:")
-		data = strings.TrimSpace(data)
-
-		var event map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-
-		eventType, _ := event["type"].(string)
-
-		switch eventType {
-		case "message_start":
-			if msg, ok := event["message"].(map[string]interface{}); ok {
-				if id, ok := msg["id"].(string); ok {
-					deltaID = id
+func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, 32)
+	go func() {
+		defer body.Close()
+		defer close(ch)
+		reader := bufio.NewReader(body)
+		var inputTokens int
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					ch <- unified.StreamEvent{Type: unified.EventError}
 				}
+				return
+			}
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			var event struct {
+				Type    string          `json:"type"`
+				Message json.RawMessage `json:"message"`
+				Delta   json.RawMessage `json:"delta"`
+				Usage   json.RawMessage `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
 			}
 
-		case "content_block_delta":
-			if delta, ok := event["delta"].(map[string]interface{}); ok {
-				if deltaType, _ := delta["type"].(string); deltaType == "text_delta" {
-					if text, ok := delta["text"].(string); ok {
-						textBuilder.WriteString(text)
-						chunk := map[string]interface{}{
-							"id":      deltaID,
-							"object":  "chat.completion.chunk",
-							"model":   modelID,
-							"choices": []map[string]interface{}{
-								{
-									"index": 0,
-									"delta": map[string]interface{}{"content": text},
-								},
+			switch event.Type {
+			case "message_start":
+				if len(event.Message) > 0 {
+					var msg struct {
+						Usage struct {
+							InputTokens int `json:"input_tokens"`
+						} `json:"usage"`
+					}
+					if json.Unmarshal(event.Message, &msg) == nil {
+						inputTokens = msg.Usage.InputTokens
+					}
+				}
+			case "content_block_delta":
+				if len(event.Delta) > 0 {
+					var delta struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					}
+					if json.Unmarshal(event.Delta, &delta) == nil && delta.Type == "text_delta" {
+						ch <- unified.StreamEvent{
+							Type: unified.EventChunk,
+							Delta: &unified.Delta{
+								Content: delta.Text,
 							},
-						}
-						chunkJSON, _ := json.Marshal(chunk)
-						fmt.Fprintf(dst, "data: %s\n\n", chunkJSON)
-						if flusher, ok := dst.(http.Flusher); ok {
-							flusher.Flush()
 						}
 					}
 				}
-			}
-
-		case "message_delta":
-			if usageRaw, ok := event["usage"].(map[string]interface{}); ok {
-				if outputTokens, ok := usageRaw["output_tokens"].(float64); ok {
-					usage.OutputTokens = int(outputTokens)
+			case "message_delta":
+				if len(event.Usage) > 0 {
+					var u struct {
+						OutputTokens int `json:"output_tokens"`
+					}
+					if json.Unmarshal(event.Usage, &u) == nil {
+						ch <- unified.StreamEvent{
+							Type: unified.EventUsage,
+							Usage: &unified.Usage{
+								InputTokens:  inputTokens,
+								OutputTokens: u.OutputTokens,
+							},
+						}
+					}
 				}
-				if inputTokens, ok := usageRaw["input_tokens"].(float64); ok {
-					usage.InputTokens = int(inputTokens)
+			case "message_stop":
+				ch <- unified.StreamEvent{
+					Type:         unified.EventDone,
+					FinishReason: "stop",
 				}
-			}
-
-		case "message_stop":
-			fmt.Fprintf(dst, "data: [DONE]\n\n")
-			if flusher, ok := dst.(http.Flusher); ok {
-				flusher.Flush()
+				return
 			}
 		}
+	}()
+	return ch
+}
+
+// =============================================================================
+// FormatUnified — Unified 响应/流 → Anthropic 客户端格式
+// =============================================================================
+
+func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, c *gin.Context, usage *registry.Usage) error {
+	if resp != nil {
+		// 非流式
+		usage.InputTokens = resp.Usage.InputTokens
+		usage.OutputTokens = resp.Usage.OutputTokens
+
+		contentBlocks := make([]map[string]interface{}, 0)
+		if resp.Content != "" {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": resp.Content,
+			})
+		}
+		for _, tc := range resp.ToolCalls {
+			var input interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+				input = tc.Function.Arguments
+			}
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type":  "tool_use",
+				"id":    tc.ID,
+				"name":  tc.Function.Name,
+				"input": input,
+			})
+		}
+
+		stopReason := "end_turn"
+		switch resp.FinishReason {
+		case "length":
+			stopReason = "max_tokens"
+		case "tool_calls":
+			stopReason = "tool_use"
+		}
+
+		anthropicResp := map[string]interface{}{
+			"id":          resp.ID,
+			"type":        "message",
+			"role":        "assistant",
+			"model":       resp.Model,
+			"content":     contentBlocks,
+			"stop_reason": stopReason,
+			"usage": map[string]interface{}{
+				"input_tokens":  resp.Usage.InputTokens,
+				"output_tokens": resp.Usage.OutputTokens,
+			},
+		}
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json")
+		body, _ := json.Marshal(anthropicResp)
+		_, err := c.Writer.Write(body)
+		return err
 	}
+
+	// 流式：Unified events → Anthropic SSE
+	c.Status(http.StatusOK)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	// message_start
+	startEvent := map[string]interface{}{
+		"type": "message_start",
+		"message": map[string]interface{}{
+			"id":          "msg_unified",
+			"type":        "message",
+			"role":        "assistant",
+			"model":       "",
+			"content":     []interface{}{},
+			"stop_reason": nil,
+			"usage": map[string]interface{}{
+				"input_tokens":  0,
+				"output_tokens": 0,
+			},
+		},
+	}
+	p.writeSSE(c, startEvent)
+
+	// content_block_start
+	p.writeSSE(c, map[string]interface{}{
+		"type":          "content_block_start",
+		"index":         0,
+		"content_block": map[string]interface{}{"type": "text", "text": ""},
+	})
+
+	var outputTokens int
+	var inputTokens int
+	for ev := range events {
+		switch ev.Type {
+		case unified.EventChunk:
+			if ev.Delta != nil && ev.Delta.Content != "" {
+				p.writeSSE(c, map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": 0,
+					"delta": map[string]interface{}{
+						"type": "text_delta",
+						"text": ev.Delta.Content,
+					},
+				})
+			}
+		case unified.EventUsage:
+			if ev.Usage != nil {
+				inputTokens = ev.Usage.InputTokens
+				outputTokens = ev.Usage.OutputTokens
+			}
+		case unified.EventDone:
+			// content_block_stop
+			p.writeSSE(c, map[string]interface{}{
+				"type":  "content_block_stop",
+				"index": 0,
+			})
+			// message_delta
+			stopReason := "end_turn"
+			switch ev.FinishReason {
+			case "length":
+				stopReason = "max_tokens"
+			case "tool_calls":
+				stopReason = "tool_use"
+			}
+			p.writeSSE(c, map[string]interface{}{
+				"type":  "message_delta",
+				"delta": map[string]interface{}{"stop_reason": stopReason},
+				"usage": map[string]interface{}{
+					"input_tokens":  inputTokens,
+					"output_tokens": outputTokens,
+				},
+			})
+			// message_stop
+			p.writeSSE(c, map[string]interface{}{"type": "message_stop"})
+		}
+	}
+	usage.InputTokens = inputTokens
+	usage.OutputTokens = outputTokens
 	return nil
+}
+
+func (p *AnthropicProvider) writeSSE(c *gin.Context, event map[string]interface{}) {
+	data, _ := json.Marshal(event)
+	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event["type"], data)
+	c.Writer.Flush()
 }

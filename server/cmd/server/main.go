@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/config"
+	coreHandler "ai-gateway/internal/core/handler"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/handler"
 	"ai-gateway/internal/mcp"
@@ -94,19 +95,18 @@ func main() {
 	providerModelHandler := handler.NewProviderModelHandler()
 	modelHandler := handler.NewModelHandler()
 	keyHandler := handler.NewKeyHandler()
-	gatewayProxyHandler := handler.NewGatewayProxyHandler()
 	usageHandler := handler.NewUsageHandler()
 	mcpProxyHandler := handler.NewMCPProxyHandler()
 	mcpHandler := handler.NewMCPHandler()
 	modelTestHandler := handler.NewModelTestHandler()
 
-	// Wildcard Unified Gateway Router Group
+	// Unified Gateway（基于 Registry + Unified 中间表示，轴辐式协议转换）
+	unifiedGatewayHandler := coreHandler.NewUnifiedGatewayHandler()
 	gateway := r.Group("/gateway/:protocol")
 	{
-		// Match specific methods or paths and delegate to generic proxy dispatcher
-		gateway.POST("/*path", gatewayProxyHandler.HandleRequest)
-		gateway.GET("/*path", gatewayProxyHandler.HandleRequest)
-		gateway.DELETE("/*path", gatewayProxyHandler.HandleRequest)
+		gateway.POST("/*path", unifiedGatewayHandler.Handle)
+		gateway.GET("/*path", unifiedGatewayHandler.Handle)
+		gateway.DELETE("/*path", unifiedGatewayHandler.Handle)
 	}
 
 	mcp := r.Group("/mcp/v1")
@@ -173,6 +173,14 @@ func main() {
 			protected.POST("/keys/:id/models/:model_id", keyHandler.AddModel)
 			protected.DELETE("/keys/:id/models/:model_id", keyHandler.RemoveModel)
 			protected.DELETE("/keys/:id/models", keyHandler.ClearModels)
+			protected.GET("/keys/:id/providers", keyHandler.ListProviders)
+			protected.POST("/keys/:id/providers/:provider_id", keyHandler.AddProvider)
+			protected.DELETE("/keys/:id/providers/:provider_id", keyHandler.RemoveProvider)
+			protected.DELETE("/keys/:id/providers", keyHandler.ClearProviders)
+			protected.GET("/keys/:id/provider-models", keyHandler.ListProviderModels)
+			protected.POST("/keys/:id/provider-models/:pmid", keyHandler.AddProviderModel)
+			protected.DELETE("/keys/:id/provider-models/:pmid", keyHandler.RemoveProviderModel)
+			protected.DELETE("/keys/:id/provider-models", keyHandler.ClearProviderModels)
 			protected.GET("/keys/:id/mcp-tools", keyHandler.GetMCPTools)
 			protected.POST("/keys/:id/mcp-tools/:tool_id", keyHandler.AddMCPTool)
 			protected.DELETE("/keys/:id/mcp-tools/:tool_id", keyHandler.RemoveMCPTool)

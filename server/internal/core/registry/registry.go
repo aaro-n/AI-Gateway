@@ -1,11 +1,15 @@
 package registry
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
+
+	"ai-gateway/internal/core/unified"
 )
 
 // =============================================================================
-// Provider 接口 — 每个协议必须实现
+// Provider 接口 — 每个协议必须实现（轴辐式：只与 Unified 中间表示互转）
 // =============================================================================
 
 // Config Provider 通用配置
@@ -14,7 +18,7 @@ type Config struct {
 	APIKey  string
 }
 
-// Usage Token 用量统计
+// Usage Token 用量统计（保留以兼容现有代码，等价于 unified.Usage）
 type Usage struct {
 	CachedTokens int
 	InputTokens  int
@@ -23,6 +27,24 @@ type Usage struct {
 
 func (u Usage) TotalTokens() int {
 	return u.CachedTokens + u.InputTokens + u.OutputTokens
+}
+
+// ToUnifiedUsage 转换为 unified.Usage
+func (u Usage) ToUnified() unified.Usage {
+	return unified.Usage{
+		CachedTokens: u.CachedTokens,
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+	}
+}
+
+// FromUnifiedUsage 从 unified.Usage 转换
+func FromUnifiedUsage(u unified.Usage) Usage {
+	return Usage{
+		CachedTokens: u.CachedTokens,
+		InputTokens:  u.InputTokens,
+		OutputTokens: u.OutputTokens,
+	}
 }
 
 // ProviderModel 上游模型信息（用于模型同步）
@@ -43,15 +65,30 @@ type ProviderModel struct {
 }
 
 // Provider 协议 Provider 接口 — 每个协议插件必须实现
+//
+// 轴辐式架构：每个协议只与 unified 中间表示互转，不直接与其他协议对话。
+// 通用中间件 (UnifiedGatewayHandler) 负责：
+//
+//	入口协议.ToUnified(body) → *unified.Request
+//	路由选择上游协议
+//	上游协议.FromUnified(req) → 发请求 → 返回 unified.Response 或 <-chan unified.StreamEvent
+//	入口协议.FormatUnified(resp/stream) → 客户端格式
 type Provider interface {
 	// SyncModels 从上游同步模型列表
 	SyncModels(providerID uint) ([]ProviderModel, error)
 
-	// HandleNative 处理本协议原生请求（同协议直通，只替换模型名）
-	HandleNative(ctx *gin.Context, modelID string, usage *Usage) error
+	// ToUnified 将本协议的客户端请求体解析为统一中间表示。
+	// body 是原始 HTTP 请求体；modelID 是路由后要替换的目标上游模型名。
+	ToUnified(body []byte, modelID string) (*unified.Request, error)
 
-	// FromOpenAI 处理来自 OpenAI 入口的请求（OpenAI → 本协议，转换后发上游）
-	FromOpenAI(ctx *gin.Context, modelID string, usage *Usage) error
+	// FromUnified 将统一中间表示转换为本协议格式，发送到上游，返回统一响应。
+	// 非流式：返回 *unified.Response；流式：返回 <-chan unified.StreamEvent（chan 关闭表示结束）。
+	// 二者通过 req.Stream 字段判断。
+	FromUnified(req *unified.Request) (*unified.Response, <-chan unified.StreamEvent, error)
+
+	// FormatUnified 将统一响应/流式事件格式化回本协议的客户端格式并写入 dst。
+	// 非流式：传入 resp 和 nil chan；流式：传入 nil resp 和 events chan。
+	FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, dst *gin.Context, usage *Usage) error
 }
 
 // =============================================================================
@@ -94,9 +131,9 @@ type ProtocolDescriptor struct {
 	Label string `json:"label"` // 显示名称 "OpenAI", "Anthropic", "Google Gemini"
 
 	// ── Key 格式 ──
-	KeyPrefix  string                  `json:"key_prefix"`  // "sk-", "sk-ant-", "AIza"
-	KeyLength  int                     `json:"key_length"`  // 24, 24, 26
-	KeyEncoder func([]byte) string     `json:"-"`           // hex / base64
+	KeyPrefix  string              `json:"key_prefix"` // "sk-", "sk-ant-", "AIza"
+	KeyLength  int                 `json:"key_length"` // 24, 24, 26
+	KeyEncoder func([]byte) string `json:"-"`          // hex / base64
 
 	// ── 认证 ──
 	AuthExtractor func(c *gin.Context) string `json:"-"`
@@ -146,4 +183,23 @@ func Names() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// =============================================================================
+// 错误类型
+// =============================================================================
+
+// HTTPError 上游 HTTP 错误（非 200 响应）
+type HTTPError struct {
+	StatusCode int
+	Body       []byte
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("upstream HTTP %d: %s", e.StatusCode, string(e.Body))
+}
+
+// IsRateLimit 判断是否为限流错误 (429)
+func (e *HTTPError) IsRateLimit() bool {
+	return e.StatusCode == 429
 }

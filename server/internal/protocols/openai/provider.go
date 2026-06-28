@@ -3,7 +3,6 @@ package openai
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/unified"
 )
 
 type OpenAIProvider struct {
@@ -85,140 +85,400 @@ func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, 
 }
 
 // =============================================================================
-// HandleNative — OpenAI 直通（只替换模型名）
+// ToUnified — OpenAI 请求 → UnifiedRequest（基本透传，OpenAI 是中间表示的基础）
 // =============================================================================
 
-func (p *OpenAIProvider) HandleNative(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	body, err := io.ReadAll(ctx.Request.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
+func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Request, error) {
+	var raw struct {
+		Model               string            `json:"model"`
+		Messages            []json.RawMessage `json:"messages"`
+		MaxTokens           int               `json:"max_tokens"`
+		MaxCompletionTokens *int              `json:"max_completion_tokens,omitempty"`
+		Temperature         *float64          `json:"temperature,omitempty"`
+		TopP                *float64          `json:"top_p,omitempty"`
+		Stream              bool              `json:"stream,omitempty"`
+		Tools               json.RawMessage   `json:"tools,omitempty"`
+		ToolChoice          json.RawMessage   `json:"tool_choice,omitempty"`
+		Stop                []string          `json:"stop,omitempty"`
+		ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parse openai body: %w", err)
 	}
 
-	// 替换模型名
-	var bodyMap map[string]interface{}
-	if err := json.Unmarshal(body, &bodyMap); err != nil {
-		return fmt.Errorf("parse body: %w", err)
+	// 合并 system 消息为 SystemPrompt（便于跨协议转换）
+	msgs := make([]unified.Message, 0, len(raw.Messages))
+	systemParts := make([]string, 0)
+	for _, rawMsg := range raw.Messages {
+		var m unified.Message
+		if err := json.Unmarshal(rawMsg, &m); err != nil {
+			return nil, fmt.Errorf("parse message: %w", err)
+		}
+		if m.Role == "system" {
+			systemParts = append(systemParts, unified.ContentString(m.Content))
+			continue
+		}
+		msgs = append(msgs, m)
 	}
-	bodyMap["model"] = modelID
-	body, _ = json.Marshal(bodyMap)
 
-	req, err := http.NewRequestWithContext(ctx.Request.Context(), "POST",
-		p.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return err
+	maxTokens := raw.MaxTokens
+	if maxTokens == 0 && raw.MaxCompletionTokens != nil {
+		maxTokens = *raw.MaxCompletionTokens
 	}
-	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
-	req.Header.Set("Content-Type", "application/json")
+
+	req := &unified.Request{
+		Model:           modelID,
+		Messages:        msgs,
+		MaxTokens:       maxTokens,
+		Temperature:     raw.Temperature,
+		TopP:            raw.TopP,
+		Stream:          raw.Stream,
+		ToolChoice:      raw.ToolChoice,
+		Stop:            raw.Stop,
+		ReasoningEffort: raw.ReasoningEffort,
+		SourceProtocol:  "openai",
+	}
+	if len(systemParts) > 0 {
+		req.SystemPrompt = strings.Join(systemParts, "\n")
+	}
+	if len(raw.Tools) > 0 {
+		var tools []unified.Tool
+		if err := json.Unmarshal(raw.Tools, &tools); err == nil {
+			req.Tools = tools
+		}
+	}
+	return req, nil
+}
+
+// =============================================================================
+// FromUnified — UnifiedRequest → OpenAI 请求，发上游，返回统一响应
+// =============================================================================
+
+func (p *OpenAIProvider) FromUnified(req *unified.Request) (*unified.Response, <-chan unified.StreamEvent, error) {
+	openAIReq := p.unifiedToOpenAI(req)
+	body, err := json.Marshal(openAIReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	httpReq, err := http.NewRequest("POST", p.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		ctx.Status(resp.StatusCode)
-		ctx.Writer.Write(respBody)
-		return fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(respBody))
+		resp.Body.Close()
+		return nil, nil, &registry.HTTPError{StatusCode: resp.StatusCode, Body: respBody}
 	}
 
-	if p.isStreaming(resp) {
-		ctx.Status(http.StatusOK)
-		ctx.Header("Content-Type", "text/event-stream")
-		ctx.Header("Cache-Control", "no-cache")
-		ctx.Header("Connection", "keep-alive")
-		return p.copyStream(ctx.Request.Context(), ctx.Writer, resp.Body, usage)
+	if req.Stream {
+		events := p.streamOpenAIToUnified(resp.Body)
+		return nil, events, nil
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+	uresp, err := p.parseOpenAIResponse(respBody)
+	return uresp, nil, err
+}
+
+// unifiedToOpenAI 将 UnifiedRequest 转回 OpenAI 请求体
+func (p *OpenAIProvider) unifiedToOpenAI(req *unified.Request) map[string]interface{} {
+	messages := make([]map[string]interface{}, 0, len(req.Messages)+1)
+	if req.SystemPrompt != "" {
+		messages = append(messages, map[string]interface{}{
+			"role":    "system",
+			"content": req.SystemPrompt,
+		})
+	}
+	for _, m := range req.Messages {
+		msg := map[string]interface{}{"role": m.Role}
+		if len(m.Content) > 0 {
+			msg["content"] = json.RawMessage(m.Content)
+		}
+		if len(m.ToolCalls) > 0 {
+			msg["tool_calls"] = m.ToolCalls
+		}
+		if m.ToolCallID != "" {
+			msg["tool_call_id"] = m.ToolCallID
+		}
+		messages = append(messages, msg)
 	}
 
-	ctx.Status(http.StatusOK)
-	ctx.Header("Content-Type", "application/json")
-	return p.copyResponse(ctx.Writer, resp.Body, usage)
+	result := map[string]interface{}{
+		"model":    req.Model,
+		"messages": messages,
+		"stream":   req.Stream,
+	}
+	if req.MaxTokens > 0 {
+		result["max_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		result["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		result["top_p"] = *req.TopP
+	}
+	if len(req.Tools) > 0 {
+		result["tools"] = req.Tools
+	}
+	if len(req.ToolChoice) > 0 {
+		result["tool_choice"] = json.RawMessage(req.ToolChoice)
+	}
+	if len(req.Stop) > 0 {
+		result["stop"] = req.Stop
+	}
+	if req.ReasoningEffort != "" {
+		result["reasoning_effort"] = req.ReasoningEffort
+	}
+	if req.Stream {
+		result["stream_options"] = map[string]bool{"include_usage": true}
+	}
+	return result
 }
 
 // =============================================================================
-// FromOpenAI — OpenAI 入口 → 本协上游（同协议，等同 HandleNative）
+// FormatUnified — Unified 响应/流 → OpenAI 客户端格式
 // =============================================================================
 
-func (p *OpenAIProvider) FromOpenAI(ctx *gin.Context, modelID string, usage *registry.Usage) error {
-	return p.HandleNative(ctx, modelID, usage)
+func (p *OpenAIProvider) FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, c *gin.Context, usage *registry.Usage) error {
+	if resp != nil {
+		// 非流式
+		usage.InputTokens = resp.Usage.InputTokens
+		usage.OutputTokens = resp.Usage.OutputTokens
+		usage.CachedTokens = resp.Usage.CachedTokens
+
+		openAIResp := map[string]interface{}{
+			"id":     resp.ID,
+			"object": "chat.completion",
+			"model":  resp.Model,
+			"choices": []map[string]interface{}{
+				{
+					"index":         0,
+					"message":       p.buildOpenAIMessage(resp),
+					"finish_reason": resp.FinishReason,
+				},
+			},
+			"usage": map[string]interface{}{
+				"prompt_tokens":     resp.Usage.InputTokens,
+				"completion_tokens": resp.Usage.OutputTokens,
+				"total_tokens":      resp.Usage.TotalTokens(),
+			},
+		}
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json")
+		body, _ := json.Marshal(openAIResp)
+		_, err := c.Writer.Write(body)
+		return err
+	}
+
+	// 流式
+	c.Status(http.StatusOK)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	var id string
+	for ev := range events {
+		switch ev.Type {
+		case unified.EventChunk:
+			if ev.Delta != nil {
+				if id == "" {
+					id = "chatcmpl-unified"
+				}
+				deltaMap := map[string]interface{}{}
+				if ev.Delta.Role != "" {
+					deltaMap["role"] = ev.Delta.Role
+				}
+				if ev.Delta.Content != "" {
+					deltaMap["content"] = ev.Delta.Content
+				}
+				if len(ev.Delta.ToolCalls) > 0 {
+					deltaMap["tool_calls"] = ev.Delta.ToolCalls
+				}
+				chunk := map[string]interface{}{
+					"id":     id,
+					"object": "chat.completion.chunk",
+					"choices": []map[string]interface{}{
+						{
+							"index":         0,
+							"delta":         deltaMap,
+							"finish_reason": nil,
+						},
+					},
+				}
+				data, _ := json.Marshal(chunk)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+				c.Writer.Flush()
+			}
+		case unified.EventUsage:
+			if ev.Usage != nil {
+				usage.InputTokens = ev.Usage.InputTokens
+				usage.OutputTokens = ev.Usage.OutputTokens
+				usage.CachedTokens = ev.Usage.CachedTokens
+			}
+		case unified.EventDone:
+			chunk := map[string]interface{}{
+				"id":     id,
+				"object": "chat.completion.chunk",
+				"choices": []map[string]interface{}{
+					{
+						"index":         0,
+						"delta":         map[string]interface{}{},
+						"finish_reason": ev.FinishReason,
+					},
+				},
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+			c.Writer.Flush()
+		}
+	}
+	return nil
+}
+
+func (p *OpenAIProvider) buildOpenAIMessage(resp *unified.Response) map[string]interface{} {
+	msg := map[string]interface{}{"role": "assistant"}
+	if resp.Content != "" {
+		msg["content"] = resp.Content
+	}
+	if len(resp.ToolCalls) > 0 {
+		msg["tool_calls"] = resp.ToolCalls
+	}
+	return msg
 }
 
 // =============================================================================
-// 内部工具
+// 内部：解析 OpenAI 响应 → UnifiedResponse
 // =============================================================================
 
 type openAIUsageRaw struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
 	PromptTokensDetails struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
 }
 
-func (u openAIUsageRaw) toUsage(usage *registry.Usage) {
-	usage.CachedTokens = u.PromptTokensDetails.CachedTokens
-	usage.InputTokens = u.PromptTokens - u.PromptTokensDetails.CachedTokens
-	usage.OutputTokens = u.CompletionTokens
-}
-
-func (p *OpenAIProvider) isStreaming(resp *http.Response) bool {
-	contentType := resp.Header.Get("Content-Type")
-	return len(resp.Header["Transfer-Encoding"]) > 0 ||
-		(len(contentType) >= 17 && contentType[:17] == "text/event-stream")
-}
-
-func (p *OpenAIProvider) copyStream(ctx context.Context, dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	reader := bufio.NewReader(src)
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-
-		if _, err := fmt.Fprint(dst, line); err != nil {
-			return err
-		}
-		if flusher, ok := dst.(http.Flusher); ok {
-			flusher.Flush()
-		}
-
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk struct {
-			Usage openAIUsageRaw `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-			chunk.Usage.toUsage(usage)
-		}
-	}
-	return nil
-}
-
-func (p *OpenAIProvider) copyResponse(dst io.Writer, src io.Reader, usage *registry.Usage) error {
-	body, err := io.ReadAll(src)
-	if err != nil {
-		return err
-	}
-	dst.Write(body)
-
-	var resp struct {
+func (p *OpenAIProvider) parseOpenAIResponse(body []byte) (*unified.Response, error) {
+	var raw struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Role      string             `json:"role"`
+				Content   string             `json:"content"`
+				ToolCalls []unified.ToolCall `json:"tool_calls"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
 		Usage openAIUsageRaw `json:"usage"`
 	}
-	json.Unmarshal(body, &resp)
-	resp.Usage.toUsage(usage)
-	return nil
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+
+	uresp := &unified.Response{
+		ID:    raw.ID,
+		Model: raw.Model,
+		Usage: unified.Usage{
+			CachedTokens: raw.Usage.PromptTokensDetails.CachedTokens,
+			InputTokens:  raw.Usage.PromptTokens - raw.Usage.PromptTokensDetails.CachedTokens,
+			OutputTokens: raw.Usage.CompletionTokens,
+		},
+	}
+	if len(raw.Choices) > 0 {
+		uresp.Content = raw.Choices[0].Message.Content
+		uresp.ToolCalls = raw.Choices[0].Message.ToolCalls
+		uresp.FinishReason = raw.Choices[0].FinishReason
+	}
+	return uresp, nil
+}
+
+// =============================================================================
+// 流式：OpenAI SSE → unified.StreamEvent chan
+// =============================================================================
+
+func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, 32)
+	go func() {
+		defer body.Close()
+		defer close(ch)
+		reader := bufio.NewReader(body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					ch <- unified.StreamEvent{Type: unified.EventError}
+				}
+				return
+			}
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				ch <- unified.StreamEvent{Type: unified.EventDone}
+				return
+			}
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Role      string             `json:"role"`
+						Content   string             `json:"content"`
+						ToolCalls []unified.ToolCall `json:"tool_calls"`
+					} `json:"delta"`
+					FinishReason string `json:"finish_reason"`
+				} `json:"choices"`
+				Usage *openAIUsageRaw `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+			if chunk.Usage != nil {
+				ch <- unified.StreamEvent{
+					Type: unified.EventUsage,
+					Usage: &unified.Usage{
+						CachedTokens: chunk.Usage.PromptTokensDetails.CachedTokens,
+						InputTokens:  chunk.Usage.PromptTokens - chunk.Usage.PromptTokensDetails.CachedTokens,
+						OutputTokens: chunk.Usage.CompletionTokens,
+					},
+				}
+			}
+			if len(chunk.Choices) > 0 {
+				delta := chunk.Choices[0].Delta
+				if delta.Content != "" || len(delta.ToolCalls) > 0 || delta.Role != "" {
+					ch <- unified.StreamEvent{
+						Type: unified.EventChunk,
+						Delta: &unified.Delta{
+							Role:      delta.Role,
+							Content:   delta.Content,
+							ToolCalls: delta.ToolCalls,
+						},
+					}
+				}
+				if chunk.Choices[0].FinishReason != "" {
+					ch <- unified.StreamEvent{
+						Type:         unified.EventDone,
+						FinishReason: chunk.Choices[0].FinishReason,
+					}
+				}
+			}
+		}
+	}()
+	return ch
 }

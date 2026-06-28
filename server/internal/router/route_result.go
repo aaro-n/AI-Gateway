@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/provider"
 )
 
+// RouteResult 路由结果。
+// 注意：不再持有 ProviderInstance（旧 provider 包的实例），
+// 上游协议的执行由 UnifiedGatewayHandler 通过 registry 动态创建。
 type RouteResult struct {
-	Provider         *model.Provider
-	ProviderModel    *model.ProviderModel
-	ProviderInstance provider.Provider
+	Provider      *model.Provider
+	ProviderModel *model.ProviderModel
 }
 
 // SupportProtocol 动态检查是否支持指定协议（优先用 Endpoints JSON）
