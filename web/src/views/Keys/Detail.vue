@@ -257,36 +257,43 @@
     </el-input>
   </el-dialog>
 
-  <!-- 添加直通模型选择框（树形按厂商分组） -->
-  <el-dialog v-model="providerModelDialogVisible" title="添加直通模型" width="700px">
-    <el-input v-model="providerModelSearch" placeholder="搜索模型ID或厂商名称..." clearable style="margin-bottom: 12px;" />
-    <div style="max-height: 400px; overflow-y: auto;">
-      <el-tree
-        ref="providerModelTreeRef"
-        :data="providerModelTree"
-        node-key="id"
-        show-checkbox
-        default-expand-all
-        :filter-node-method="filterProviderModelNode"
-        @check="onProviderModelTreeCheck"
+  <!-- 添加直通模型选择框 -->
+  <el-dialog v-model="providerModelDialogVisible" title="添加直通模型" width="650px">
+    <el-form label-width="auto" v-loading="providerModelDialogLoading">
+      <el-form-item label="厂商名称" required>
+        <el-select v-model="directProviderForm.provider_id" @change="onDirectProviderChange" placeholder="请选择厂商" filterable style="width: 100%">
+          <el-option v-for="p in directProviders" :key="p.id" :label="p.name" :value="p.id" />
+        </el-select>
+      </el-form-item>
+    </el-form>
+    <div v-if="directProviderForm.provider_id" style="margin-bottom: 8px;">
+      <el-input v-model="directModelSearch" placeholder="搜索模型ID..." clearable style="margin-bottom: 8px;" />
+      <el-table
+        ref="directModelTableRef"
+        :data="paginatedDirectModels"
+        stripe
+        max-height="340"
+        @selection-change="onDirectModelSelectionChange"
+        row-key="id"
       >
-        <template #default="{ node, data }">
-          <span v-if="data.isProvider" style="font-weight: 600;">
-            {{ data.label }}
-            <el-tag size="small" type="info" style="margin-left: 8px;">{{ data.modelCount }}</el-tag>
-          </span>
-          <span v-else style="display: inline-flex; align-items: center; gap: 12px;">
-            <code style="min-width: 220px; font-size: 13px;">{{ data.label }}</code>
-            <span style="color: var(--el-text-color-secondary); font-size: 12px;">{{ data.display_name }}</span>
-          </span>
-        </template>
-      </el-tree>
-      <el-empty v-if="providerModelTree.length === 0" description="无可用模型" />
+        <el-table-column type="selection" width="45" :selectable="() => true" />
+        <el-table-column label="模型ID" prop="model_id" min-width="200">
+          <template #default="{ row }">
+            <code style="font-size: 13px;">{{ row.model_id }}</code>
+          </template>
+        </el-table-column>
+        <el-table-column label="显示名称" prop="display_name" min-width="160">
+          <template #default="{ row }">
+            <span style="color: var(--el-text-color-secondary); font-size: 12px;">{{ row.display_name }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="filteredDirectModels.length === 0" description="无可用模型" :image-size="60" />
     </div>
     <template #footer>
       <el-button @click="providerModelDialogVisible = false">{{ t('common.cancel') }}</el-button>
-      <el-button type="primary" @click="addSelectedProviderModels" :loading="addingProviderModels" :disabled="selectedProviderModelIDs.length === 0">
-        {{ t('common.save') }} ({{ selectedProviderModelIDs.length }})
+      <el-button type="primary" @click="addSelectedProviderModels" :loading="addingProviderModels" :disabled="directSelectedModelIDs.length === 0">
+        {{ t('common.save') }} ({{ directSelectedModelIDs.length }})
       </el-button>
     </template>
   </el-dialog>
@@ -318,7 +325,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -362,26 +369,6 @@ const promptsLoading = ref(false)
 const knownProviderModelIds = ref<Set<number>>(new Set())
 const knownModelIds = ref<Set<number>>(new Set())
 
-// localStorage 删除黑名单（持久化）
-const LS_DELETED_PM = `deleted-pm-${keyId}`
-const LS_DELETED_MODELS = `deleted-models-${keyId}`
-
-function loadDeletedSet(lsKey: string): Set<number> {
-  try {
-    const raw = localStorage.getItem(lsKey)
-    if (raw) return new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-  return new Set()
-}
-
-function saveDeletedSet(lsKey: string, set: Set<number>) {
-  localStorage.setItem(lsKey, JSON.stringify([...set]))
-}
-
-// 运行时黑名单（从 localStorage 加载）
-const deletedProviderModelIds = ref<Set<number>>(loadDeletedSet(LS_DELETED_PM))
-const deletedModelIds = ref<Set<number>>(loadDeletedSet(LS_DELETED_MODELS))
-
 const enablingModels = ref(false)
 const enablingProviderModels = ref(false)
 const disablingProviderModels = ref(false)
@@ -392,9 +379,26 @@ const clearingPrompts = ref(false)
 
 // 直通模型选择弹窗
 const providerModelDialogVisible = ref(false)
-const providerModelSearch = ref('')
-const selectedProviderModelIDs = ref<number[]>([])
+const providerModelDialogLoading = ref(false)
 const addingProviderModels = ref(false)
+const directProviders = ref<any[]>([])
+const directAvailableModels = ref<any[]>([])
+const directModelSearch = ref('')
+const directSelectedModelIDs = ref<number[]>([])
+const directModelTableRef = ref<any>(null)
+const directProviderForm = reactive({
+  provider_id: null as number | null,
+})
+
+const filteredDirectModels = computed(() => {
+  const s = directModelSearch.value.toLowerCase()
+  if (!s) return directAvailableModels.value
+  return directAvailableModels.value.filter((m: any) =>
+    m.model_id?.toLowerCase().includes(s) || m.display_name?.toLowerCase().includes(s)
+  )
+})
+
+const paginatedDirectModels = computed(() => filteredDirectModels.value)
 
 // 模型映射选择弹窗
 const modelDialogVisible = ref(false)
@@ -404,6 +408,7 @@ const addingModels = ref(false)
 
 const modelsDefaultSort = getSortConfig('key-models', 'name')
 const providersDefaultSort = getSortConfig('key-providers', 'name')
+let directProvidersLoaded = false
 const toolsDefaultSort = getSortConfig('key-tools', 'name')
 const resourcesDefaultSort = getSortConfig('key-resources', 'name')
 const promptsDefaultSort = getSortConfig('key-prompts', 'name')
@@ -420,10 +425,7 @@ watch(activeTab, (newTab) => {
   if (newTab === 'prompts' && prompts.value.length === 0) fetchPrompts()
 })
 
-// 搜索时过滤树节点
-watch(providerModelSearch, (val) => {
-  providerModelTreeRef.value?.filter(val)
-})
+
 
 async function fetchKey() {
   loading.value = true
@@ -444,14 +446,14 @@ async function fetchModels() {
   try {
     const res = await api.get(`/keys/${keyId}/models`)
     allAvailableModels.value = res.data.models || []
-    // 初始化 known set（首次加载时过滤掉黑名单中的 ID）
+    // 初始化 known set（首次加载时只包含已关联 selected 的模型）
     if (knownModelIds.value.size === 0) {
       const ids = allAvailableModels.value
-        .filter((m: any) => !deletedModelIds.value.has(m.id))
+        .filter((m: any) => m.selected)
         .map((m: any) => m.id)
       knownModelIds.value = new Set(ids)
     }
-    // 只显示已关联（在 known set 中）的模型
+    // 只显示在 known set 中的模型（即已关联或曾关联的）
     models.value = allAvailableModels.value.filter((m: any) => knownModelIds.value.has(m.id))
   } finally {
     modelsLoading.value = false
@@ -463,14 +465,14 @@ async function fetchProviderModels() {
   try {
     const res = await api.get(`/keys/${keyId}/provider-models`)
     allProviderModels.value = res.data.models || []
-    // 初始化 known set（首次加载时过滤掉黑名单中的 ID）
+    // 初始化 known set（首次加载时只包含已关联 selected 的模型）
     if (knownProviderModelIds.value.size === 0) {
       const ids = allProviderModels.value
-        .filter((m: any) => !deletedProviderModelIds.value.has(m.id))
+        .filter((m: any) => m.selected)
         .map((m: any) => m.id)
       knownProviderModelIds.value = new Set(ids)
     }
-    // 只显示已关联（在 known set 中）的模型
+    // 只显示在 known set 中的模型（即已关联或曾关联的）
     providerModels.value = allProviderModels.value.filter((m: any) => knownProviderModelIds.value.has(m.id))
   } finally {
     providerModelsLoading.value = false
@@ -513,13 +515,6 @@ async function toggleModel(row: any) {
     if (row.selected) {
       await api.post(`/keys/${keyId}/models/${row.id}`)
       knownModelIds.value = new Set([...knownModelIds.value, row.id])
-      // 重新添加时从删除黑名单移除
-      if (deletedModelIds.value.has(row.id)) {
-        const d = new Set(deletedModelIds.value)
-        d.delete(row.id)
-        deletedModelIds.value = d
-        saveDeletedSet(LS_DELETED_MODELS, d)
-      }
     } else {
       await api.delete(`/keys/${keyId}/models/${row.id}`)
       row.selected = false
@@ -533,15 +528,10 @@ async function toggleModel(row: any) {
 async function removeModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/models/${row.id}`)
-    // 从 known set 移除
+    // 从 known set 移除，后续可重新添加
     const newKnown = new Set(knownModelIds.value)
     newKnown.delete(row.id)
     knownModelIds.value = newKnown
-    // 加入删除黑名单并持久化
-    const deleted = new Set(deletedModelIds.value)
-    deleted.add(row.id)
-    deletedModelIds.value = deleted
-    saveDeletedSet(LS_DELETED_MODELS, deleted)
     // 从表格移除
     models.value = models.value.filter((m: any) => m.id !== row.id)
     ElMessage.success(t('common.success'))
@@ -556,13 +546,6 @@ async function toggleProviderModel(row: any) {
     if (row.selected) {
       await api.post(`/keys/${keyId}/provider-models/${row.id}`)
       knownProviderModelIds.value = new Set([...knownProviderModelIds.value, row.id])
-      // 重新添加时从删除黑名单移除
-      if (deletedProviderModelIds.value.has(row.id)) {
-        const d = new Set(deletedProviderModelIds.value)
-        d.delete(row.id)
-        deletedProviderModelIds.value = d
-        saveDeletedSet(LS_DELETED_PM, d)
-      }
     } else {
       await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
       row.selected = false
@@ -576,15 +559,10 @@ async function toggleProviderModel(row: any) {
 async function removeProviderModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
-    // 从 known set 移除
+    // 从 known set 移除，后续可重新添加
     const newKnown = new Set(knownProviderModelIds.value)
     newKnown.delete(row.id)
     knownProviderModelIds.value = newKnown
-    // 加入删除黑名单并持久化
-    const deleted = new Set(deletedProviderModelIds.value)
-    deleted.add(row.id)
-    deletedProviderModelIds.value = deleted
-    saveDeletedSet(LS_DELETED_PM, deleted)
     // 从表格移除
     providerModels.value = providerModels.value.filter((m: any) => m.id !== row.id)
     ElMessage.success(t('common.success'))
@@ -708,82 +686,63 @@ async function disableAllProviderModels() {
 }
 
 // 直通模型选择弹窗相关
-const providerModelTreeRef = ref<any>(null)
 
-// 构建 el-tree 数据：父节点=厂商，子节点=模型
-const providerModelTree = computed(() => {
-  const search = providerModelSearch.value.toLowerCase()
-  // 排除所有已知关联模型 + 删除黑名单
-  const available = allProviderModels.value.filter((m: any) => {
-    if (knownProviderModelIds.value.has(m.id)) return false
-    if (!search) return true
-    return m.model_id?.toLowerCase().includes(search) ||
-           m.provider_name?.toLowerCase().includes(search) ||
-           m.display_name?.toLowerCase().includes(search)
-  })
-
-  // 按厂商分组构建树节点
-  const groupMap = new Map<string, any[]>()
-  for (const m of available) {
-    const name = m.provider_name || '未知厂商'
-    if (!groupMap.has(name)) groupMap.set(name, [])
-    groupMap.get(name)!.push(m)
+async function showProviderModelDialog() {
+  if (!directProvidersLoaded) {
+    providerModelDialogLoading.value = true
+    try {
+      const res = await api.get('/providers')
+      directProviders.value = (res.data.providers || []).sort((a: any, b: any) => a.name.localeCompare(b.name))
+      directProvidersLoaded = true
+    } catch { /* ignore */ }
+    providerModelDialogLoading.value = false
   }
-
-  const tree: any[] = []
-  for (const [providerName, models] of groupMap) {
-    tree.push({
-      id: `provider:${providerName}`,
-      label: providerName,
-      isProvider: true,
-      modelCount: models.length,
-      children: models.map((m: any) => ({
-        id: m.id,
-        label: m.model_id,
-        display_name: m.display_name,
-        isProvider: false,
-      })),
-    })
-  }
-  return tree
-})
-
-// 搜索过滤方法
-function filterProviderModelNode(value: string, data: any): boolean {
-  if (!value) return true
-  const v = value.toLowerCase()
-  if (data.isProvider) {
-    return data.label.toLowerCase().includes(v)
-  }
-  return data.label.toLowerCase().includes(v) ||
-         (data.display_name || '').toLowerCase().includes(v)
+  // 确保已加载的模型列表是最新的
+  await fetchProviderModels()
+  directProviderForm.provider_id = null
+  directModelSearch.value = ''
+  directSelectedModelIDs.value = []
+  directAvailableModels.value = []
+  providerModelDialogVisible.value = true
 }
 
-// 树节点勾选变化时更新选中 ID 列表
-function onProviderModelTreeCheck(_checked: any, state: any) {
-  selectedProviderModelIDs.value = state.checkedKeys.filter((k: any) => typeof k === 'number')
+async function onDirectProviderChange() {
+  directModelSearch.value = ''
+  directSelectedModelIDs.value = []
+  if (!directProviderForm.provider_id) {
+    directAvailableModels.value = []
+    return
+  }
+  providerModelDialogLoading.value = true
+  try {
+    const res = await api.get(`/providers/${directProviderForm.provider_id}/models`)
+    const models = (res.data.models || [])
+    // 过滤：只排除已在「模型厂商」tab 中添加的模型
+    directAvailableModels.value = models
+      .filter((m: any) => !knownProviderModelIds.value.has(m.id))
+      .sort((a: any, b: any) => a.model_id.localeCompare(b.model_id))
+  } catch {
+    directAvailableModels.value = []
+  } finally {
+    providerModelDialogLoading.value = false
+  }
 }
 
-function showProviderModelDialog() {
-  providerModelSearch.value = ''
-  selectedProviderModelIDs.value = []
-  fetchProviderModels().then(() => {
-    providerModelDialogVisible.value = true
-  })
+function onDirectModelSelectionChange(selection: any[]) {
+  directSelectedModelIDs.value = selection.map((s: any) => s.id)
 }
 
 async function addSelectedProviderModels() {
+  if (directSelectedModelIDs.value.length === 0) return
   addingProviderModels.value = true
   let successCount = 0
   let errorMsg = ''
   const newKnown = new Set(knownProviderModelIds.value)
-  const newDeleted = new Set(deletedProviderModelIds.value)
   try {
-    for (const pmid of selectedProviderModelIDs.value) {
+    for (const pmid of directSelectedModelIDs.value) {
       try {
         await api.post(`/keys/${keyId}/provider-models/${pmid}`)
         newKnown.add(pmid)
-        newDeleted.delete(pmid)  // 重新添加时从黑名单移除
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
@@ -792,15 +751,13 @@ async function addSelectedProviderModels() {
     }
     if (successCount > 0) {
       knownProviderModelIds.value = newKnown
-      deletedProviderModelIds.value = newDeleted
-      saveDeletedSet(LS_DELETED_PM, newDeleted)
-      ElMessage.success(`成功添加 ${successCount} 个模型`)
+      ElMessage.success(t('common.success'))
     }
-    if (errorMsg) {
-      ElMessage.error(errorMsg)
-    }
+    if (errorMsg) ElMessage.error(errorMsg)
     providerModelDialogVisible.value = false
     await fetchProviderModels()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
     addingProviderModels.value = false
   }
@@ -839,13 +796,11 @@ async function addSelectedModels() {
   let successCount = 0
   let errorMsg = ''
   const newKnown = new Set(knownModelIds.value)
-  const newDeleted = new Set(deletedModelIds.value)
   try {
     for (const mid of selectedModelIDs.value) {
       try {
         await api.post(`/keys/${keyId}/models/${mid}`)
         newKnown.add(mid)
-        newDeleted.delete(mid)  // 重新添加时从黑名单移除
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
@@ -854,8 +809,6 @@ async function addSelectedModels() {
     }
     if (successCount > 0) {
       knownModelIds.value = newKnown
-      deletedModelIds.value = newDeleted
-      saveDeletedSet(LS_DELETED_MODELS, newDeleted)
       ElMessage.success(`成功添加 ${successCount} 个模型`)
     }
     if (errorMsg) {

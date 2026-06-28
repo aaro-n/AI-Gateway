@@ -41,7 +41,8 @@
         <el-table-column :label="t('models.providerType')" width="120">
           <template #default="{ row }">
             <el-tag v-if="row.provider?.openai_base_url" type="success" size="small" style="margin-right: 4px">OpenAI</el-tag>
-            <el-tag v-if="row.provider?.anthropic_base_url" type="primary" size="small">Anthropic</el-tag>
+            <el-tag v-if="row.provider?.anthropic_base_url" type="primary" size="small" style="margin-right: 4px">Anthropic</el-tag>
+            <el-tag v-if="row.provider?.gemini_base_url" type="warning" size="small">Gemini</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="provider_model_name" :label="t('modelMapping.actualModel')">
@@ -292,7 +293,22 @@ async function fetchProviders() {
 async function loadProviderModels() {
   if (!mappingForm.provider_id) return
   const res = await api.get(`/providers/${mappingForm.provider_id}/models`)
-  providerModels.value = (res.data.models || []).sort((a: any, b: any) => a.model_id.localeCompare(b.model_id))
+  // 过滤已添加的 model_id（编辑时保留当前映射的 model_id）
+  const currentEditID = editingMapping.value?.provider_model_id
+  const usedModelIDs = new Set(
+    mappings.value
+      .filter(m => m.id !== editingMapping.value?.id)
+      .map(m => m.provider_model_id)
+  )
+  console.log('[loadProviderModels] mappings:', mappings.value)
+  console.log('[loadProviderModels] usedModelIDs:', [...usedModelIDs])
+  console.log('[loadProviderModels] currentEditID:', currentEditID)
+  const allModels = (res.data.models || [])
+  console.log('[loadProviderModels] all model IDs:', allModels.map((m: any) => m.id))
+  providerModels.value = allModels
+    .filter((m: any) => !usedModelIDs.has(m.id) || m.id === currentEditID)
+    .sort((a: any, b: any) => a.model_id.localeCompare(b.model_id))
+  console.log('[loadProviderModels] filtered models:', providerModels.value.map((m: any) => m.model_id))
 }
 
 function handleSelectionChange(selection: Mapping[]) {

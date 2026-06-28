@@ -392,8 +392,24 @@ async function handleFetchProviderModels() {
     for (const m of list) {
       const modelID = m.model_id || m.ModelID || ''
       if (!modelID || existing.has(modelID)) continue
+      
+      const displayName = m.display_name || m.DisplayName || modelID
+      const ownedBy = m.owned_by || m.OwnedBy || form.provider_type
+      const contextWindow = m.context_window !== undefined ? m.context_window : (m.ContextWindow !== undefined ? m.ContextWindow : 4096)
+      const maxOutput = m.max_output !== undefined ? m.max_output : (m.MaxOutput !== undefined ? m.MaxOutput : 1024)
+      const supportsVision = m.supports_vision !== undefined ? m.supports_vision : (m.SupportsVision !== undefined ? m.SupportsVision : true)
+      const supportsTools = m.supports_tools !== undefined ? m.supports_tools : (m.SupportsTools !== undefined ? m.SupportsTools : true)
+      const supportsStream = m.supports_stream !== undefined ? m.supports_stream : (m.SupportsStream !== undefined ? m.SupportsStream : true)
+
       fetchedModels.value.push({
         model_id: modelID,
+        display_name: displayName,
+        owned_by: ownedBy,
+        context_window: contextWindow,
+        max_output: maxOutput,
+        supports_vision: supportsVision,
+        supports_tools: supportsTools,
+        supports_stream: supportsStream,
         testStatus: 'untested',
         latency: 0,
         error: '',
@@ -552,13 +568,13 @@ async function handleSubmit() {
         try {
           await api.post(`/providers/${providerId}/models`, {
             model_id: m.model_id,
-            display_name: m.model_id,
-            owned_by: form.provider_type,
-            context_window: 4096,
-            max_output: 1024,
-            supports_vision: true,
-            supports_tools: true,
-            supports_stream: true,
+            display_name: m.display_name || m.model_id,
+            owned_by: m.owned_by || form.provider_type,
+            context_window: m.context_window !== undefined ? m.context_window : 4096,
+            max_output: m.max_output !== undefined ? m.max_output : 1024,
+            supports_vision: m.supports_vision !== false,
+            supports_tools: m.supports_tools !== false,
+            supports_stream: m.supports_stream !== false,
             source: m.source || 'manual'
           })
         } catch (err: any) {

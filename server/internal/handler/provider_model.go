@@ -130,13 +130,25 @@ func (h *ProviderModelHandler) Create(c *gin.Context) {
 	if source == "" {
 		source = "manual"
 	}
+
+	contextWindow := req.ContextWindow
+	maxOutput := req.MaxOutput
+	if source == "manual" {
+		if contextWindow <= 0 {
+			contextWindow = 8192 // 默认一个合理的上下文窗口，防止出错
+		}
+		if maxOutput <= 0 {
+			maxOutput = 4096 // 默认最大输出，防止出错
+		}
+	}
+
 	pm := model.ProviderModel{
 		ProviderID:     uint(providerID),
 		ModelID:        req.ModelID,
 		DisplayName:    req.DisplayName,
 		OwnedBy:        req.OwnedBy,
-		ContextWindow:  req.ContextWindow,
-		MaxOutput:      req.MaxOutput,
+		ContextWindow:  contextWindow,
+		MaxOutput:      maxOutput,
 		InputPrice:     req.InputPrice,
 		OutputPrice:    req.OutputPrice,
 		SupportsVision: req.SupportsVision,
@@ -187,9 +199,17 @@ func (h *ProviderModelHandler) Update(c *gin.Context) {
 		updates["owned_by"] = *req.OwnedBy
 	}
 	if req.ContextWindow != nil {
+		if pm.Source == "sync" && *req.ContextWindow != pm.ContextWindow {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot modify context window of synced models"})
+			return
+		}
 		updates["context_window"] = *req.ContextWindow
 	}
 	if req.MaxOutput != nil {
+		if pm.Source == "sync" && *req.MaxOutput != pm.MaxOutput {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot modify max output of synced models"})
+			return
+		}
 		updates["max_output"] = *req.MaxOutput
 	}
 	if req.InputPrice != nil {

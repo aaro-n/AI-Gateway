@@ -99,12 +99,12 @@
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item :label="t('provider.contextWindow')">
-              <el-input-number v-model="form.context_window" :min="0" style="width: 100%" />
+              <el-input-number v-model="form.context_window" :min="0" style="width: 100%" :disabled="editingModel && editingModel.source === 'sync'" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item :label="t('provider.maxOutput')">
-              <el-input-number v-model="form.max_output" :min="0" style="width: 100%" />
+              <el-input-number v-model="form.max_output" :min="0" style="width: 100%" :disabled="editingModel && editingModel.source === 'sync'" />
             </el-form-item>
           </el-col>
         </el-row>

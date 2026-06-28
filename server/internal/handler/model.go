@@ -78,6 +78,7 @@ type providerBasicResponse struct {
 	Name             string `json:"name"`
 	OpenAIBaseURL    string `json:"openai_base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
+	GeminiBaseURL    string `json:"gemini_base_url"`
 }
 
 func NewModelHandler() *ModelHandler {
@@ -100,8 +101,8 @@ func (h *ModelHandler) List(c *gin.Context) {
 			Order("weight DESC").
 			Find(&mappings)
 
-	mappingResponses := make([]mappingResponse, len(mappings))
-	for j, mm := range mappings {
+		mappingResponses := make([]mappingResponse, len(mappings))
+		for j, mm := range mappings {
 			mappingResponses[j] = toMappingResponse(mm)
 		}
 
@@ -168,6 +169,9 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 清理已软删除的同名记录，释放唯一索引
+	model.DB.Unscoped().Where("name = ?", req.Name).Delete(&model.Model{})
+
 	m := model.Model{
 		Name:    req.Name,
 		Enabled: true,
@@ -211,6 +215,8 @@ func (h *ModelHandler) Update(c *gin.Context) {
 
 	updates := map[string]interface{}{}
 	if req.Name != nil {
+		// 清理已软删除的同名记录，释放唯一索引（排除自己）
+		model.DB.Unscoped().Where("name = ? AND id != ?", *req.Name, m.ID).Delete(&model.Model{})
 		updates["name"] = *req.Name
 	}
 	if req.Enabled != nil {
@@ -324,6 +330,16 @@ func (h *ModelHandler) CreateMapping(c *gin.Context) {
 
 	if pm.ProviderID != req.ProviderID {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "provider mismatch"})
+		return
+	}
+
+	// 检查同一厂商下是否已有相同 provider_model_id 的映射
+	var existingCount int64
+	model.DB.Model(&model.ModelMapping{}).
+		Where("model_id = ? AND provider_id = ? AND provider_model_id = ?", m.ID, req.ProviderID, req.ProviderModelID).
+		Count(&existingCount)
+	if existingCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "provider model already mapped"})
 		return
 	}
 
@@ -487,6 +503,7 @@ func toMappingResponse(m model.ModelMapping) mappingResponse {
 			Name:             m.Provider.Name,
 			OpenAIBaseURL:    m.Provider.OpenAIBaseURL,
 			AnthropicBaseURL: m.Provider.AnthropicBaseURL,
+			GeminiBaseURL:    m.Provider.GeminiBaseURL,
 		}
 	}
 

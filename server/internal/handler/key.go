@@ -870,7 +870,7 @@ func (h *KeyHandler) checkModelIDConflict(keyID uint, modelID string) string {
 	if err := model.DB.Where("name = ? AND id IN ?", modelID, kmIDs).First(&m).Error; err != nil {
 		return ""
 	}
-	return fmt.Sprintf("model ID '%s' 已在'模型映射'白名单中，不允许同时出现在'模型厂商'直通白名单", modelID)
+	return fmt.Sprintf("该模型已在「模型映射」白名单中，请先从「模型映射」中移除 %s，再添加为直通模型", modelID)
 }
 
 // checkMappingModelConflict 检查添加虚拟模型到映射白名单时，是否与直通白名单冲突。
@@ -884,7 +884,7 @@ func (h *KeyHandler) checkMappingModelConflict(keyID uint, virtualModelName stri
 	if err := model.DB.Where("model_id = ? AND id IN ?", virtualModelName, kpmIDs).First(&pm).Error; err != nil {
 		return ""
 	}
-	return fmt.Sprintf("model ID '%s' 已在'模型厂商'直通白名单中，不允许同时出现在'模型映射'白名单", virtualModelName)
+	return fmt.Sprintf("该模型已在「模型厂商」直通白名单中，请先从「模型厂商」中移除 %s，再添加为映射模型", virtualModelName)
 }
 
 func (h *KeyHandler) Get(c *gin.Context) {

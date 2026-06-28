@@ -245,7 +245,7 @@ func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
 		}
 	}
 	if len(conflicts) > 0 {
-		return strings.Join(conflicts, ", ")
+		return "以下模型同时出现在「模型厂商」直通和「模型映射」中，请从一侧移除：" + strings.Join(conflicts, "、")
 	}
 	return ""
 }
