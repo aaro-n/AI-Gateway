@@ -29,8 +29,19 @@ func NewAnthropicProvider(cfg *registry.Config) *AnthropicProvider {
 // =============================================================================
 
 type anthropicModelEntry struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
+	ID            string `json:"id"`
+	Type          string `json:"type"`
+	DisplayName   string `json:"display_name"`
+	MaxInputToken int    `json:"max_input_tokens"`
+	MaxTokens     int    `json:"max_tokens"`
+	Capabilities  struct {
+		ImageInput struct {
+			Supported bool `json:"supported"`
+		} `json:"image_input"`
+		Thinking struct {
+			Supported bool `json:"supported"`
+		} `json:"thinking"`
+	} `json:"capabilities"`
 }
 
 func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
@@ -54,7 +65,8 @@ func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderMode
 	}
 
 	var result struct {
-		Data []anthropicModelEntry `json:"data"`
+		Data    []anthropicModelEntry `json:"data"`
+		HasMore bool                  `json:"has_more"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
@@ -69,12 +81,19 @@ func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderMode
 		if displayName == "" {
 			displayName = m.ID
 		}
+
+		supportsVision := m.Capabilities.ImageInput.Supported
+		supportsTools := true
+
 		models = append(models, registry.ProviderModel{
 			ProviderID:     providerID,
 			ModelID:        m.ID,
 			DisplayName:    displayName,
 			OwnedBy:        "anthropic",
-			SupportsTools:  true,
+			ContextWindow:  m.MaxInputToken,
+			MaxOutput:      m.MaxTokens,
+			SupportsVision: supportsVision,
+			SupportsTools:  supportsTools,
 			SupportsStream: true,
 			IsAvailable:    true,
 			Source:         "sync",

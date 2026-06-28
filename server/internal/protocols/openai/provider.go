@@ -29,12 +29,21 @@ func NewOpenAIProvider(cfg *registry.Config) *OpenAIProvider {
 // =============================================================================
 
 type openAIModelEntry struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by"`
-	Pricing struct {
+	ID                  string `json:"id"`
+	OwnedBy             string `json:"owned_by"`
+	DisplayName         string `json:"display_name"`          // 某些兼容 API 返回
+	ContextLength       int    `json:"context_length"`        // 上下文窗口
+	MaxInputTokens      int    `json:"max_input_tokens"`      // 别名
+	MaxTokens           int    `json:"max_tokens"`            // 最大输出（别名）
+	MaxCompletionTokens int    `json:"max_completion_tokens"` // 最大输出（OpenAI 标准）
+	Pricing             struct {
 		Completion float64 `json:"completion"`
 		Prompt     float64 `json:"prompt"`
 	} `json:"pricing"`
+	Capabilities *struct {
+		Vision    bool `json:"vision"`
+		Streaming bool `json:"streaming"`
+	} `json:"capabilities,omitempty"`
 }
 
 func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
@@ -68,13 +77,53 @@ func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, 
 		if m.ID == "" {
 			continue
 		}
+		// 跳过非 chat 模型（embedding、moderation、tts 等）
+		if strings.Contains(m.ID, "embedding") || strings.Contains(m.ID, "moderation") ||
+			strings.Contains(m.ID, "whisper") || strings.Contains(m.ID, "tts") ||
+			strings.Contains(m.ID, "dall-e") || strings.Contains(m.ID, "davinci") {
+			continue
+		}
+
+		displayName := m.DisplayName
+		if displayName == "" {
+			displayName = m.ID
+		}
+
+		// 上下文窗口：多种字段名兼容
+		contextWindow := m.ContextLength
+		if contextWindow == 0 {
+			contextWindow = m.MaxInputTokens
+		}
+
+		// 最大输出：优先 max_completion_tokens，其次 max_tokens
+		maxOutput := m.MaxCompletionTokens
+		if maxOutput == 0 {
+			maxOutput = m.MaxTokens
+		}
+
+		// 视觉支持：从 capabilities 读取，或根据模型名推断
+		supportsVision := false
+		if m.Capabilities != nil {
+			supportsVision = m.Capabilities.Vision
+		}
+		if !supportsVision {
+			supportsVision = strings.Contains(m.ID, "vision") ||
+				strings.Contains(m.ID, "gpt-4o") ||
+				strings.Contains(m.ID, "gpt-4-turbo") ||
+				strings.Contains(m.ID, "claude") ||
+				strings.Contains(m.ID, "gemini")
+		}
+
 		models = append(models, registry.ProviderModel{
 			ProviderID:     providerID,
 			ModelID:        m.ID,
-			DisplayName:    m.ID,
+			DisplayName:    displayName,
 			OwnedBy:        m.OwnedBy,
+			ContextWindow:  contextWindow,
+			MaxOutput:      maxOutput,
 			InputPrice:     m.Pricing.Prompt,
 			OutputPrice:    m.Pricing.Completion,
+			SupportsVision: supportsVision,
 			SupportsTools:  true,
 			SupportsStream: true,
 			IsAvailable:    true,
