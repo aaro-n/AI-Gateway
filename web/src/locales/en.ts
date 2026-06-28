@@ -52,6 +52,8 @@ export default {
     mcps: 'MCP Services',
     keys: 'API Keys',
     model_usage: 'Model Usage',
+    mcp_usage: 'MCP Usage',
+    protocol_compare: 'Protocol Compare',
     settings: 'Settings'
   },
   dashboard: {
@@ -244,5 +246,23 @@ export default {
     confirmDelete: 'Are you sure you want to delete this MCP service? Associated tools, resources, and prompts will also be deleted.',
     confirmBatchDelete: 'Are you sure you want to delete {count} selected MCP services? Associated tools, resources, and prompts will also be deleted.',
     serviceDisabled: 'Service is disabled'
+  },
+  protocolCompare: {
+    title: 'Protocol Compare',
+    intro: 'When a client uses one AI protocol format (e.g. Gemini) but the backend model uses another protocol (e.g. OpenAI), the comparison tables below show each protocol\'s native capabilities and what features may be lost or limited during protocol conversion.',
+    capabilityOverview: 'Capability Overview',
+    category: 'Category',
+    capability: 'Capability / Feature',
+    crossCompare: 'Cross Compare',
+    fromProtocol: 'Input Protocol (Client)',
+    toProtocol: 'Backend Protocol (Actual Model)',
+    lossLevel: 'Loss Level',
+    fullLoss: 'Full Loss',
+    partialLoss: 'Partial / Limited',
+    note: 'Note',
+    noLoss: 'Fully Compatible — No Feature Loss',
+    detailView: 'Protocol Detail',
+    capabilityList: 'Capability List',
+    description: 'Description'
   }
 }

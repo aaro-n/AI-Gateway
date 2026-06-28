@@ -53,6 +53,7 @@ export default {
     keys: 'API 密钥',
     model_usage: '模型用量',
     mcp_usage: 'MCP用量',
+    protocol_compare: '协议对比',
     settings: '系统设置'
   },
   dashboard: {
@@ -245,6 +246,24 @@ export default {
     confirmDelete: '确定要删除此 MCP服务吗？相关的工具、资源和提示词也会被删除。',
     confirmBatchDelete: '确定要删除选中的 {count} 个MCP服务吗？相关的工具、资源和提示词也会被删除。',
     serviceDisabled: '服务已禁用'
+  },
+  protocolCompare: {
+    title: '协议对比',
+    intro: '当客户端使用一种 AI 协议格式（如 Gemini）访问，而后端模型使用另一种协议（如 OpenAI），以下对比表格展示各协议的原生能力以及协议转换时可能丢失或受限的功能。',
+    capabilityOverview: '能力总览',
+    category: '分类',
+    capability: '能力/功能',
+    crossCompare: '两两对比',
+    fromProtocol: '输入协议（客户端）',
+    toProtocol: '后端协议（实际模型）',
+    lossLevel: '损失程度',
+    fullLoss: '完全丢失',
+    partialLoss: '部分受限',
+    note: '说明',
+    noLoss: '功能完全兼容，无损失',
+    detailView: '单协议详情',
+    capabilityList: '能力列表',
+    description: '描述'
   },
   mcpUsage: {
     stats: '统计',

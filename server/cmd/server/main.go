@@ -99,6 +99,7 @@ func main() {
 	mcpProxyHandler := handler.NewMCPProxyHandler()
 	mcpHandler := handler.NewMCPHandler()
 	modelTestHandler := handler.NewModelTestHandler()
+	protocolCompareHandler := handler.NewProtocolCompareHandler()
 
 	// Unified Gateway（基于 Registry + Unified 中间表示，轴辐式协议转换）
 	unifiedGatewayHandler := coreHandler.NewUnifiedGatewayHandler()
@@ -215,7 +216,7 @@ func main() {
 			protected.GET("/mcps/:id/prompts", mcpHandler.ListPrompts)
 			protected.PUT("/mcps/prompts/:id", mcpHandler.UpdatePrompt)
 
-			// ── 新增：协议元数据（前端动态渲染）──
+			// ── 协议元数据（前端动态渲染）──
 			protected.GET("/protocols", func(c *gin.Context) {
 				all := registry.All()
 				result := make([]gin.H, 0, len(all))
@@ -233,6 +234,12 @@ func main() {
 					"test_concurrency": cfg.Server.TestConcurrency,
 				})
 			})
+
+			// ── 协议对比：查看各协议能力及两两对比差异 ──
+			protected.GET("/protocols/compare", protocolCompareHandler.GetAllProtocols)
+			protected.GET("/protocols/compare/:protocol", protocolCompareHandler.GetProtocolCaps)
+			protected.GET("/protocols/compare-between/:from/:to", protocolCompareHandler.Compare)
+			protected.GET("/protocols/compare-all", protocolCompareHandler.CompareAll)
 
 		}
 	}
