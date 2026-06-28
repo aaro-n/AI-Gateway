@@ -88,15 +88,30 @@ func Get(name string) *ProtocolCaps { return globalRegistry.Get(name) }
 // Compare 返回两个协议之间的能力对比
 func Compare(from, to string) ComparisonResult {
 	fromCaps, toCaps := globalRegistry.Get(from), globalRegistry.Get(to)
+	if fromCaps == nil || toCaps == nil {
+		label := func(p string) string {
+			if p == "openai" {
+				return "OpenAI"
+			} else if p == "anthropic" {
+				return "Anthropic"
+			} else if p == "gemini" {
+				return "Google Gemini"
+			}
+			return p
+		}
+		return ComparisonResult{
+			FromProtocol: from,
+			FromLabel:    label(from),
+			ToProtocol:   to,
+			ToLabel:      label(to),
+			Summary:      "未知协议，无法对比",
+		}
+	}
 	result := ComparisonResult{
 		FromProtocol: from,
 		FromLabel:    fromCaps.Label,
 		ToProtocol:   to,
 		ToLabel:      toCaps.Label,
-	}
-	if fromCaps == nil || toCaps == nil {
-		result.Summary = "Unknown protocol"
-		return result
 	}
 	if from == to {
 		result.Summary = "相同协议，无功能损失"

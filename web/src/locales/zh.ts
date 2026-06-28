@@ -263,7 +263,8 @@ export default {
     noLoss: '功能完全兼容，无损失',
     detailView: '单协议详情',
     capabilityList: '能力列表',
-    description: '描述'
+    description: '描述',
+    errorHint: '对比数据加载失败，请稍后重试'
   },
   mcpUsage: {
     stats: '统计',

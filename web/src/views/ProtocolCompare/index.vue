@@ -215,7 +215,15 @@ async function fetchCompare() {
     const { data } = await api.get(`/protocols/compare-between/${fromProtocol.value}/${toProtocol.value}`)
     compareResult.value = data
   } catch {
-    compareResult.value = null
+    // API 失败时显示友好提示
+    compareResult.value = {
+      from_protocol: fromProtocol.value,
+      from_label: protocols.value.find(p => p.protocol === fromProtocol.value)?.label || fromProtocol.value,
+      to_protocol: toProtocol.value,
+      to_label: protocols.value.find(p => p.protocol === toProtocol.value)?.label || toProtocol.value,
+      losses: [],
+      summary: t('protocolCompare.errorHint')
+    }
   }
 }
 
@@ -230,7 +238,19 @@ async function fetchDetail() {
 }
 
 function onCompareChange() {
-  if (fromProtocol.value === toProtocol.value) return
+  if (fromProtocol.value === toProtocol.value) {
+    // 相同协议：直接显示无损失
+    const fromLabel = protocols.value.find(p => p.protocol === fromProtocol.value)?.label || fromProtocol.value
+    compareResult.value = {
+      from_protocol: fromProtocol.value,
+      from_label: fromLabel,
+      to_protocol: toProtocol.value,
+      to_label: fromLabel,
+      losses: [],
+      summary: t('protocolCompare.noLoss')
+    }
+    return
+  }
   fetchCompare()
 }
 

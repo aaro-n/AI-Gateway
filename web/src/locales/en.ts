@@ -263,6 +263,7 @@ export default {
     noLoss: 'Fully Compatible — No Feature Loss',
     detailView: 'Protocol Detail',
     capabilityList: 'Capability List',
-    description: 'Description'
+    description: 'Description',
+    errorHint: 'Comparison data failed to load, please retry later'
   }
 }
