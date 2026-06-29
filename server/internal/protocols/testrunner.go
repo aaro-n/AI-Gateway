@@ -27,12 +27,12 @@ type TestResult struct {
 // openaiURL/anthropicURL/geminiURL: provider 已配置的各协议端点
 // apiKey: provider 的 API 密钥
 // modelID: 测试的目标模型 ID
-func RunTest(protocol, openaiURL, anthropicURL, geminiURL, apiKey, modelID string) TestResult {
+func RunTest(protocol, openaiURL, anthropicURL, geminiURL, deepseekURL, apiKey, modelID string) TestResult {
 	// 构建测试请求体
 	bodyBytes := buildTestBody(protocol, modelID)
 
 	// 选择上游协议：优先同协议直通，否则任选一个
-	upProto := pickUpstream(protocol, openaiURL, anthropicURL, geminiURL)
+	upProto := pickUpstream(protocol, openaiURL, anthropicURL, geminiURL, deepseekURL)
 	callMethod := "direct"
 	if upProto != protocol {
 		callMethod = "convert"
@@ -62,7 +62,7 @@ func RunTest(protocol, openaiURL, anthropicURL, geminiURL, apiKey, modelID strin
 	if !ok {
 		return TestResult{Error: "unsupported upstream: " + upProto, CallMethod: callMethod, LatencyMs: time.Since(start).Milliseconds()}
 	}
-	baseURL := pickBaseURL(upProto, openaiURL, anthropicURL, geminiURL)
+	baseURL := pickBaseURL(upProto, openaiURL, anthropicURL, geminiURL, deepseekURL)
 	upProv := upDesc.NewProvider(&registry.Config{BaseURL: baseURL, APIKey: apiKey})
 
 	resp, _, err := upProv.FromUnified(req)
@@ -114,7 +114,7 @@ func buildTestBody(protocol, modelID string) []byte {
 	return b
 }
 
-func pickUpstream(target string, openaiURL, anthropicURL, geminiURL string) string {
+func pickUpstream(target string, openaiURL, anthropicURL, geminiURL, deepseekURL string) string {
 	if target == "openai" && openaiURL != "" {
 		return "openai"
 	}
@@ -124,6 +124,9 @@ func pickUpstream(target string, openaiURL, anthropicURL, geminiURL string) stri
 	if target == "gemini" && geminiURL != "" {
 		return "gemini"
 	}
+	if target == "deepseek" && deepseekURL != "" {
+		return "deepseek"
+	}
 	// 回退到第一个可用端点
 	if openaiURL != "" {
 		return "openai"
@@ -131,10 +134,16 @@ func pickUpstream(target string, openaiURL, anthropicURL, geminiURL string) stri
 	if anthropicURL != "" {
 		return "anthropic"
 	}
-	return "gemini"
+	if geminiURL != "" {
+		return "gemini"
+	}
+	if deepseekURL != "" {
+		return "deepseek"
+	}
+	return "openai"
 }
 
-func pickBaseURL(protocol, openaiURL, anthropicURL, geminiURL string) string {
+func pickBaseURL(protocol, openaiURL, anthropicURL, geminiURL, deepseekURL string) string {
 	switch protocol {
 	case "openai":
 		return openaiURL
@@ -142,6 +151,8 @@ func pickBaseURL(protocol, openaiURL, anthropicURL, geminiURL string) string {
 		return anthropicURL
 	case "gemini":
 		return geminiURL
+	case "deepseek":
+		return deepseekURL
 	}
 	return ""
 }

@@ -35,10 +35,12 @@ func (r *Registry) gemini() *ProtocolCaps {
 			{Key: "video_input", Label: "视频输入", Description: "支持视频文件输入，逐帧分析理解视频内容", Category: "advanced"},
 
 			// ── 高级功能 ──
-			{Key: "caching", Label: "上下文缓存 (Context Caching)", Description: "支持缓存大型上下文（如视频、文档），降低重复请求成本", Category: "advanced"},
+			{Key: "context_caching", Label: "上下文缓存 (Context Caching)", Description: "支持缓存大型上下文（如视频、文档），降低重复请求成本", Category: "advanced"},
 			{Key: "safety_settings", Label: "安全过滤设置", Description: "细粒度的安全过滤器（harassment/hate/dangerous/sexual），可调整阈值", Category: "advanced"},
-			{Key: "candidate_count", Label: "多候选回复", Description: "candidateCount 参数支持单次请求返回多个候选回复", Category: "advanced"},
+			{Key: "n_choices", Label: "多候选回复", Description: "candidateCount 参数支持单次请求返回多个候选回复", Category: "advanced"},
 			{Key: "thought_signatures", Label: "思考签名验证", Description: "流式响应中包含 thought 内容，可验证思考过程完整性", Category: "advanced"},
+			{Key: "logprobs", Label: "对数概率 (Logprobs)", Description: "responseLogprobs 参数返回每个 token 的对数概率和候选", Category: "advanced"},
+			{Key: "thinking", Label: "思考/推理 (Gemini Thinking)", Description: "thinkingConfig 参数控制 Gemini 2.5 Flash Thinking 的推理预算", Category: "advanced"},
 		},
 	}
 }

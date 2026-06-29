@@ -17,8 +17,9 @@
           <template #default="{ row }">
             <el-tag v-if="row.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
             <el-tag v-if="row.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
-            <el-tag v-if="row.gemini_base_url" type="warning">Gemini</el-tag>
-            <span v-if="!row.openai_base_url && !row.anthropic_base_url && !row.gemini_base_url">-</span>
+            <el-tag v-if="row.gemini_base_url" type="warning" style="margin-right: 4px">Gemini</el-tag>
+            <el-tag v-if="row.deepseek_base_url" type="danger">DeepSeek</el-tag>
+            <span v-if="!row.openai_base_url && !row.anthropic_base_url && !row.gemini_base_url && !row.deepseek_base_url">-</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('provider.models')" width="120" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
@@ -50,7 +51,7 @@
             <el-option
               v-for="item in protocolMeta"
               :key="item.name"
-              :label="item.name === 'openai' ? 'OpenAI' : item.name === 'anthropic' ? 'Anthropic' : item.name === 'gemini' ? 'Google Gemini' : item.name.toUpperCase()"
+              :label="item.name === 'openai' ? 'OpenAI' : item.name === 'anthropic' ? 'Anthropic' : item.name === 'gemini' ? 'Google Gemini' : item.name === 'deepseek' ? 'DeepSeek' : item.name.toUpperCase()"
               :value="item.name"
             />
           </el-select>
@@ -159,6 +160,7 @@ const form = reactive({
   openai_base_url: '',
   anthropic_base_url: '',
   gemini_base_url: '',
+  deepseek_base_url: '',
   base_url: '', // Unified BaseURL input shown to user, mapped dynamically
   api_key: '',
   provider_type: ''
@@ -223,6 +225,8 @@ function mapBaseUrls() {
     form.anthropic_base_url = form.base_url
   } else if (form.provider_type === 'gemini') {
     form.gemini_base_url = form.base_url
+  } else if (form.provider_type === 'deepseek') {
+    form.deepseek_base_url = form.base_url
   }
 }
 
@@ -291,7 +295,8 @@ async function testSingleFetchedModel(model: any) {
       openai_base_url: form.openai_base_url,
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
-      api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT', // Use existing saved key if editing
+      deepseek_base_url: form.deepseek_base_url,
+      api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
     const tests = res.data.tests || []
@@ -354,6 +359,7 @@ async function testSingleFetchedModelAsync(model: any, idx: number) {
       openai_base_url: form.openai_base_url,
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
+      deepseek_base_url: form.deepseek_base_url,
       api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
@@ -384,6 +390,7 @@ async function handleFetchProviderModels() {
       openai_base_url: form.openai_base_url,
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
+      deepseek_base_url: form.deepseek_base_url,
       api_key: form.api_key
     })
     const list = res.data.models || []
@@ -437,6 +444,7 @@ async function handleTestConnection() {
       openai_base_url: form.openai_base_url,
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
+      deepseek_base_url: form.deepseek_base_url,
       api_key: form.api_key
     })
     ElMessage.success('连接测试成功！厂商端点及 API Key 校验通过，可以配置和测试模型。')
@@ -468,7 +476,7 @@ async function showDialog(id?: number) {
   selectedPreset.value = ''
   fetchedModels.value = []
   pendingDeleteIds.value = []
-  Object.assign(form, { name: '', openai_base_url: '', anthropic_base_url: '', gemini_base_url: '', base_url: '', api_key: '', provider_type: '' })
+  Object.assign(form, { name: '', openai_base_url: '', anthropic_base_url: '', gemini_base_url: '', deepseek_base_url: '', base_url: '', api_key: '', provider_type: '' })
   dialogVisible.value = true
   
   if (id) {
@@ -477,13 +485,14 @@ async function showDialog(id?: number) {
       const res = await api.get(`/providers/${id}`)
       const provider = res.data.provider
       if (provider) {
-        const type = provider.openai_base_url ? 'openai' : (provider.anthropic_base_url ? 'anthropic' : 'gemini')
-        const bUrl = provider.openai_base_url || provider.anthropic_base_url || provider.gemini_base_url || ''
+        const type = provider.openai_base_url ? 'openai' : (provider.anthropic_base_url ? 'anthropic' : (provider.gemini_base_url ? 'gemini' : (provider.deepseek_base_url ? 'deepseek' : '')))
+        const bUrl = provider.openai_base_url || provider.anthropic_base_url || provider.gemini_base_url || provider.deepseek_base_url || ''
         Object.assign(form, {
           name: provider.name || '',
           openai_base_url: provider.openai_base_url || '',
           anthropic_base_url: provider.anthropic_base_url || '',
           gemini_base_url: provider.gemini_base_url || '',
+          deepseek_base_url: provider.deepseek_base_url || '',
           base_url: bUrl,
           api_key: '',
           provider_type: type

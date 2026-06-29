@@ -52,6 +52,7 @@ type testProviderModelRequest struct {
 	OpenAIBaseURL    string `json:"openai_base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
 	GeminiBaseURL    string `json:"gemini_base_url"`
+	DeepSeekBaseURL  string `json:"deepseek_base_url"`
 	APIKey           string `json:"api_key"`
 	ModelID          string `json:"model_id" binding:"required"`
 }
@@ -163,6 +164,7 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 		OpenAIBaseURL:    strings.TrimSuffix(req.OpenAIBaseURL, "/"),
 		AnthropicBaseURL: strings.TrimSuffix(req.AnthropicBaseURL, "/"),
 		GeminiBaseURL:    strings.TrimSuffix(req.GeminiBaseURL, "/"),
+		DeepSeekBaseURL:  strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
 		APIKey:           req.APIKey,
 	}
 
@@ -183,6 +185,8 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 			model.DB.Where("anthropic_base_url = ?", p.AnthropicBaseURL).First(&existing)
 		} else if req.GeminiBaseURL != "" {
 			model.DB.Where("gemini_base_url = ?", p.GeminiBaseURL).First(&existing)
+		} else if req.DeepSeekBaseURL != "" {
+			model.DB.Where("deepseek_base_url = ?", p.DeepSeekBaseURL).First(&existing)
 		}
 		if existing.ID > 0 {
 			p.APIKey = existing.APIKey
@@ -194,7 +198,7 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult, geminiResult *protocolTestResult
+	var openAIResult, anthropicResult, geminiResult, deepseekResult *protocolTestResult
 
 	if p.OpenAIBaseURL != "" {
 		wg.Add(1)
@@ -223,6 +227,15 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 		}()
 	}
 
+	if p.DeepSeekBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(p, pm, "deepseek")
+			deepseekResult = &result
+		}()
+	}
+
 	wg.Wait()
 
 	tests := []protocolTestResult{}
@@ -234,6 +247,9 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 	if geminiResult != nil {
 		tests = append(tests, *geminiResult)
+	}
+	if deepseekResult != nil {
+		tests = append(tests, *deepseekResult)
 	}
 
 	// 保存测试结果（ProviderID 可能为 0，表示未保存的 provider）
@@ -458,6 +474,7 @@ func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) pr
 		p.OpenAIBaseURL,
 		p.AnthropicBaseURL,
 		p.GeminiBaseURL,
+		p.DeepSeekBaseURL,
 		p.APIKey,
 		pm.ModelID,
 	)

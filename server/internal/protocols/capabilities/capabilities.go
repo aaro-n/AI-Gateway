@@ -58,6 +58,7 @@ func (r *Registry) registerAll() {
 	r.register(r.openAI())
 	r.register(r.anthropic())
 	r.register(r.gemini())
+	r.register(r.deepseek())
 }
 
 func (r *Registry) register(p *ProtocolCaps) {
@@ -68,7 +69,7 @@ func (r *Registry) register(p *ProtocolCaps) {
 func (r *Registry) GetAll() []*ProtocolCaps {
 	result := make([]*ProtocolCaps, 0, len(r.protocols))
 	// 固定顺序
-	for _, k := range []string{"openai", "anthropic", "gemini"} {
+	for _, k := range []string{"openai", "anthropic", "gemini", "deepseek"} {
 		if p, ok := r.protocols[k]; ok {
 			result = append(result, p)
 		}
@@ -96,6 +97,8 @@ func Compare(from, to string) ComparisonResult {
 				return "Anthropic"
 			} else if p == "gemini" {
 				return "Google Gemini"
+			} else if p == "deepseek" {
+				return "DeepSeek"
 			}
 			return p
 		}

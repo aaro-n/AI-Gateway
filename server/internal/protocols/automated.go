@@ -10,7 +10,7 @@ import (
 
 // AutoSyncModels 按优先级 (Gemini → Anthropic → OpenAI) 遍历已配置端点，
 // 使用核心注册表的新 Provider 接口执行 SyncModels，返回首个成功的结果。
-func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, apiKey string) ([]model.ProviderModel, error) {
+func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepseekURL, apiKey string) ([]model.ProviderModel, error) {
 	type endpoint struct {
 		name    string
 		baseURL string
@@ -20,6 +20,7 @@ func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, apiKey 
 		{"gemini", geminiURL},
 		{"anthropic", anthropicURL},
 		{"openai", openAIURL},
+		{"deepseek", deepseekURL},
 	}
 
 	for _, ep := range endpoints {

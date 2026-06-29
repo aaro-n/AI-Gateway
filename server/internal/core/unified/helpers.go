@@ -55,3 +55,13 @@ func BlocksContent(blocks []ContentBlock) json.RawMessage {
 	b, _ := json.Marshal(blocks)
 	return b
 }
+
+// RawJSON 将 json.RawMessage 解析为 interface{}，用于安全放入 map[string]interface{} 后再序列化。
+// 直接放 json.RawMessage 到 map 中会被 encoding/json base64 编码，所以需要先反序列化一层。
+func RawJSON(raw json.RawMessage) interface{} {
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	return v
+}

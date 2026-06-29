@@ -19,19 +19,22 @@ import "encoding/json"
 // =============================================================================
 
 // Request 统一请求中间表示。
-// 字段以 OpenAI Chat Completions 为基础，扩展容纳 Anthropic/Gemini 的差异。
+// 字段以 OpenAI Chat Completions 为基础，扩展容纳 Anthropic/Gemini/DeepSeek 的差异。
 type Request struct {
-	Model           string          `json:"model"`
-	Messages        []Message       `json:"messages"`
-	SystemPrompt    string          `json:"system_prompt,omitempty"` // Anthropic 顶层 system / Gemini systemInstruction
-	MaxTokens       int             `json:"max_tokens,omitempty"`
-	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            *float64        `json:"top_p,omitempty"`
-	Stream          bool            `json:"stream,omitempty"`
-	Tools           []Tool          `json:"tools,omitempty"`
-	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"` // 各协议差异大，保留原始 JSON
-	Stop            []string        `json:"stop,omitempty"`
-	ReasoningEffort string          `json:"reasoning_effort,omitempty"` // o1/claude thinking 等推理模型
+	Model            string          `json:"model"`
+	Messages         []Message       `json:"messages"`
+	SystemPrompt     string          `json:"system_prompt,omitempty"` // Anthropic 顶层 system / Gemini systemInstruction
+	MaxTokens        int             `json:"max_tokens,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"top_p,omitempty"`
+	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"` // 频率惩罚（-2.0 到 2.0）
+	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`  // 存在惩罚（-2.0 到 2.0）
+	Stream           bool            `json:"stream,omitempty"`
+	Tools            json.RawMessage `json:"tools,omitempty"`           // 原始 tools JSON（透传，兼容 web_search 等非 function 工具）
+	ToolChoice       json.RawMessage `json:"tool_choice,omitempty"`     // 各协议差异大，保留原始 JSON
+	ResponseFormat   json.RawMessage `json:"response_format,omitempty"` // JSON 模式 / 结构化输出
+	Stop             []string        `json:"stop,omitempty"`
+	ReasoningEffort  string          `json:"reasoning_effort,omitempty"` // o1/Claude/DeepSeek 推理深度
 
 	// 源协议标记（响应反向转换时需要知道返回什么格式给客户端）
 	SourceProtocol string `json:"-"`
@@ -39,11 +42,13 @@ type Request struct {
 
 // Message 统一消息（OpenAI 风格，支持 content blocks）
 type Message struct {
-	Role       string          `json:"role"`    // system/user/assistant/tool
-	Content    json.RawMessage `json:"content"` // string 或 []ContentBlock
-	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Role             string          `json:"role"`                        // system/user/assistant/tool
+	Content          json.RawMessage `json:"content"`                     // string 或 []ContentBlock
+	ReasoningContent string          `json:"reasoning_content,omitempty"` // DeepSeek/o1 思考链（多轮对话须原样传回）
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Prefix           bool            `json:"prefix,omitempty"` // DeepSeek Chat Prefix Completion
 }
 
 // ToolCall 工具调用（OpenAI 风格）
@@ -115,9 +120,11 @@ type Response struct {
 
 // Usage 统一用量
 type Usage struct {
-	CachedTokens int `json:"cached_tokens,omitempty"`
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	CachedTokens    int `json:"cached_tokens,omitempty"`
+	InputTokens     int `json:"input_tokens"`
+	OutputTokens    int `json:"output_tokens"`
+	CacheHitTokens  int `json:"cache_hit_tokens,omitempty"`  // DeepSeek prompt_cache_hit_tokens
+	CacheMissTokens int `json:"cache_miss_tokens,omitempty"` // DeepSeek prompt_cache_miss_tokens
 }
 
 func (u Usage) TotalTokens() int {

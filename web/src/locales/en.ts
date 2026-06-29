@@ -130,6 +130,8 @@ export default {
   key: {
     name: 'Key Name',
     key: 'API Key',
+    format: 'Key Format',
+    selectFormat: 'Select provider type',
     model: 'Models',
     expiresAt: 'Expires At',
     createKey: 'Create API Key',
@@ -204,7 +206,8 @@ export default {
     editMapping: 'Edit Mapping',
     providerType: 'Provider Type',
     modelDisabled: 'Model is disabled',
-    testAllMappings: 'Test All Mappings'
+    testAllMappings: 'Test All Mappings',
+    duplicateName: 'Model name already exists, please use a different name'
   },
   mcp: {
     services: 'MCP Services',
@@ -249,7 +252,7 @@ export default {
   },
   protocolCompare: {
     title: 'Protocol Compare',
-    intro: 'When a client uses one AI protocol format (e.g. Gemini) but the backend model uses another protocol (e.g. OpenAI), the comparison tables below show each protocol\'s native capabilities and what features may be lost or limited during protocol conversion.',
+    intro: 'When a client uses one AI protocol format (e.g. Gemini) but the backend model uses another protocol (e.g. OpenAI), the comparison tables below show the native capabilities of OpenAI, Anthropic, Google Gemini, and DeepSeek, and what features may be lost or limited during protocol conversion.',
     capabilityOverview: 'Capability Overview',
     category: 'Category',
     capability: 'Capability / Feature',
@@ -266,6 +269,8 @@ export default {
     description: 'Description',
     errorHint: 'Comparison data failed to load, please retry later',
     sameProtoDesc: 'Info',
-    sameProtoHint: 'Direct {name} protocol passthrough — client and backend use the same protocol, all native capabilities are fully available with no feature loss.'
+    sameProtoHint: 'Direct {name} protocol passthrough — client and backend use the same protocol, all native capabilities are fully available with no feature loss.',
+    dualCompare: 'Dual Compare',
+    noData: 'Please select two protocols'
   }
 }

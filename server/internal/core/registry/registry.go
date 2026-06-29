@@ -20,9 +20,11 @@ type Config struct {
 
 // Usage Token 用量统计（保留以兼容现有代码，等价于 unified.Usage）
 type Usage struct {
-	CachedTokens int
-	InputTokens  int
-	OutputTokens int
+	CachedTokens    int
+	CacheHitTokens  int
+	CacheMissTokens int
+	InputTokens     int
+	OutputTokens    int
 }
 
 func (u Usage) TotalTokens() int {
@@ -32,18 +34,22 @@ func (u Usage) TotalTokens() int {
 // ToUnifiedUsage 转换为 unified.Usage
 func (u Usage) ToUnified() unified.Usage {
 	return unified.Usage{
-		CachedTokens: u.CachedTokens,
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
+		CachedTokens:    u.CachedTokens,
+		CacheHitTokens:  u.CacheHitTokens,
+		CacheMissTokens: u.CacheMissTokens,
+		InputTokens:     u.InputTokens,
+		OutputTokens:    u.OutputTokens,
 	}
 }
 
 // FromUnifiedUsage 从 unified.Usage 转换
 func FromUnifiedUsage(u unified.Usage) Usage {
 	return Usage{
-		CachedTokens: u.CachedTokens,
-		InputTokens:  u.InputTokens,
-		OutputTokens: u.OutputTokens,
+		CachedTokens:    u.CachedTokens,
+		CacheHitTokens:  u.CacheHitTokens,
+		CacheMissTokens: u.CacheMissTokens,
+		InputTokens:     u.InputTokens,
+		OutputTokens:    u.OutputTokens,
 	}
 }
 

@@ -308,6 +308,7 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 		provider.OpenAIBaseURL,
 		provider.AnthropicBaseURL,
 		provider.GeminiBaseURL,
+		provider.DeepSeekBaseURL,
 		provider.APIKey,
 	)
 	if err != nil {

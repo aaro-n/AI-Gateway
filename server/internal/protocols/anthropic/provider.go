@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -28,23 +29,31 @@ func NewAnthropicProvider(cfg *registry.Config) *AnthropicProvider {
 // SyncModels
 // =============================================================================
 
-type anthropicModelEntry struct {
-	ID            string `json:"id"`
-	Type          string `json:"type"`
-	DisplayName   string `json:"display_name"`
-	MaxInputToken int    `json:"max_input_tokens"`
-	MaxTokens     int    `json:"max_tokens"`
-	Capabilities  struct {
-		ImageInput struct {
+func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
+	// 尝试从 Anthropic Models API 获取模型规格，失败则回退硬编码
+	apiSpecs, err := p.fetchModelSpecs()
+	if err != nil {
+		log.Printf("[Anthropic] Models API unavailable (%v), using hardcoded specs as fallback", err)
+		return p.knownModels(providerID), nil
+	}
+	log.Printf("[Anthropic] Models API returned %d models, merging with hardcoded IDs", len(apiSpecs))
+	return p.buildModels(providerID, apiSpecs), nil
+}
+
+// anthropicModelSpec represents a model's specs from the Anthropic Models API.
+type anthropicModelSpec struct {
+	ID           string `json:"id"`
+	DisplayName  string `json:"display_name"`
+	MaxInput     int    `json:"max_input_tokens"`
+	MaxOutput    int    `json:"max_tokens"`
+	Capabilities struct {
+		Vision struct {
 			Supported bool `json:"supported"`
 		} `json:"image_input"`
-		Thinking struct {
-			Supported bool `json:"supported"`
-		} `json:"thinking"`
 	} `json:"capabilities"`
 }
 
-func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
+func (p *AnthropicProvider) fetchModelSpecs() (map[string]*anthropicModelSpec, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", p.cfg.BaseURL+"/v1/models", nil)
 	if err != nil {
@@ -61,45 +70,120 @@ func (p *AnthropicProvider) SyncModels(providerID uint) ([]registry.ProviderMode
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Anthropic API error: %s", string(body))
+		return nil, fmt.Errorf("Anthropic Models API error: %s", string(body))
 	}
 
 	var result struct {
-		Data    []anthropicModelEntry `json:"data"`
-		HasMore bool                  `json:"has_more"`
+		Data []anthropicModelSpec `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	models := make([]registry.ProviderModel, 0, len(result.Data))
-	for _, m := range result.Data {
-		if m.ID == "" {
+	specs := make(map[string]*anthropicModelSpec, len(result.Data))
+	for i := range result.Data {
+		specs[result.Data[i].ID] = &result.Data[i]
+	}
+	return specs, nil
+}
+
+// knownModelIDs lists all Claude model IDs (正版无日期格式).
+var knownModelIDs = []struct {
+	id      string
+	display string
+}{
+	{"claude-opus-4-8", "Claude Opus 4.8"},
+	{"claude-sonnet-4-6", "Claude Sonnet 4.6"},
+	{"claude-haiku-4-5", "Claude Haiku 4.5"},
+	{"claude-opus-4-7", "Claude Opus 4.7"},
+	{"claude-opus-4-6", "Claude Opus 4.6"},
+	{"claude-sonnet-4-5", "Claude Sonnet 4.5"},
+	{"claude-opus-4-5", "Claude Opus 4.5"},
+}
+
+// hardcodedFallbacks: only for the 3 old 4.5-gen models that the API may not return.
+var hardcodedFallbacks = map[string]struct {
+	ctx int
+	out int
+	vis bool
+}{
+	"claude-haiku-4-5":  {200000, 64000, true},
+	"claude-sonnet-4-5": {200000, 64000, true},
+	"claude-opus-4-5":   {200000, 64000, true},
+}
+
+// buildModels merges known IDs with API specs. Newer models (4.6+) come from API only;
+// the 3 old 4.5-gen models fall back to official hardcoded values if not in API.
+func (p *AnthropicProvider) buildModels(providerID uint, specs map[string]*anthropicModelSpec) []registry.ProviderModel {
+	result := make([]registry.ProviderModel, 0, len(knownModelIDs))
+	for _, m := range knownModelIDs {
+		var ctx, out int
+		var vis bool
+		name := m.display
+
+		if s, ok := specs[m.id]; ok {
+			ctx, out, vis = s.MaxInput, s.MaxOutput, s.Capabilities.Vision.Supported
+			if s.DisplayName != "" {
+				name = s.DisplayName
+			}
+		} else if fb, ok := hardcodedFallbacks[m.id]; ok {
+			ctx, out, vis = fb.ctx, fb.out, fb.vis
+		} else {
 			continue
 		}
-		displayName := m.DisplayName
-		if displayName == "" {
-			displayName = m.ID
-		}
 
-		supportsVision := m.Capabilities.ImageInput.Supported
-		supportsTools := true
-
-		models = append(models, registry.ProviderModel{
+		result = append(result, registry.ProviderModel{
 			ProviderID:     providerID,
-			ModelID:        m.ID,
-			DisplayName:    displayName,
+			ModelID:        m.id,
+			DisplayName:    name,
 			OwnedBy:        "anthropic",
-			ContextWindow:  m.MaxInputToken,
-			MaxOutput:      m.MaxTokens,
-			SupportsVision: supportsVision,
-			SupportsTools:  supportsTools,
+			ContextWindow:  ctx,
+			MaxOutput:      out,
+			SupportsVision: vis,
+			SupportsTools:  true,
 			SupportsStream: true,
 			IsAvailable:    true,
 			Source:         "sync",
 		})
 	}
-	return models, nil
+	return result
+}
+
+// knownModels is the offline fallback when the API is unreachable.
+// It includes ALL models with their best-known specs from official docs.
+func (p *AnthropicProvider) knownModels(providerID uint) []registry.ProviderModel {
+	models := []struct {
+		id   string
+		name string
+		ctx  int
+		out  int
+		vis  bool
+	}{
+		{"claude-opus-4-8", "Claude Opus 4.8", 1000000, 128000, true},
+		{"claude-sonnet-4-6", "Claude Sonnet 4.6", 1000000, 128000, true},
+		{"claude-haiku-4-5", "Claude Haiku 4.5", 200000, 64000, true},
+		{"claude-opus-4-7", "Claude Opus 4.7", 1000000, 128000, true},
+		{"claude-opus-4-6", "Claude Opus 4.6", 1000000, 128000, true},
+		{"claude-sonnet-4-5", "Claude Sonnet 4.5", 200000, 64000, true},
+		{"claude-opus-4-5", "Claude Opus 4.5", 200000, 64000, true},
+	}
+	result := make([]registry.ProviderModel, 0, len(models))
+	for _, m := range models {
+		result = append(result, registry.ProviderModel{
+			ProviderID:     providerID,
+			ModelID:        m.id,
+			DisplayName:    m.name,
+			OwnedBy:        "anthropic",
+			ContextWindow:  m.ctx,
+			MaxOutput:      m.out,
+			SupportsVision: m.vis,
+			SupportsTools:  true,
+			SupportsStream: true,
+			IsAvailable:    true,
+			Source:         "sync",
+		})
+	}
+	return result
 }
 
 // =============================================================================
@@ -220,10 +304,7 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 		SourceProtocol: "anthropic",
 	}
 	if len(raw.Tools) > 0 {
-		var tools []unified.Tool
-		if err := json.Unmarshal(raw.Tools, &tools); err == nil {
-			req.Tools = tools
-		}
+		req.Tools = raw.Tools
 	}
 	return req, nil
 }
@@ -344,15 +425,22 @@ func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]
 		result["stop_sequences"] = req.Stop
 	}
 	if len(req.Tools) > 0 {
-		tools := make([]map[string]interface{}, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			tools = append(tools, map[string]interface{}{
-				"name":         t.Function.Name,
-				"description":  t.Function.Description,
-				"input_schema": t.Function.Parameters,
-			})
+		var unifiedTools []unified.Tool
+		if err := json.Unmarshal(req.Tools, &unifiedTools); err == nil {
+			tools := make([]map[string]interface{}, 0, len(unifiedTools))
+			for _, t := range unifiedTools {
+				if t.Function.Name != "" {
+					tools = append(tools, map[string]interface{}{
+						"name":         t.Function.Name,
+						"description":  t.Function.Description,
+						"input_schema": t.Function.Parameters,
+					})
+				}
+			}
+			if len(tools) > 0 {
+				result["tools"] = tools
+			}
 		}
-		result["tools"] = tools
 	}
 	return result
 }

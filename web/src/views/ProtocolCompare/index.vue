@@ -14,16 +14,27 @@
         <template #header>
           <span class="sub-title">{{ t('protocolCompare.capabilityOverview') }}</span>
         </template>
-        <el-table :data="capabilityTable" border stripe style="width: 100%">
-          <el-table-column prop="category" :label="t('protocolCompare.category')" width="120" />
-          <el-table-column prop="capability" :label="t('protocolCompare.capability')" min-width="200" />
-          <el-table-column v-for="p in protocols" :key="p.protocol" :label="p.label" width="140" align="center">
-            <template #default="{ row }">
-              <el-tag v-if="row[p.protocol]" type="success" size="small">{{ t('common.yes') }}</el-tag>
-              <el-tag v-else type="info" size="small">{{ t('common.no') }}</el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="capability-table">
+          <table class="sticky-table">
+            <thead>
+              <tr>
+                <th class="sticky-col sticky-col-1">{{ t('protocolCompare.category') }}</th>
+                <th class="sticky-col sticky-col-2">{{ t('protocolCompare.capability') }}</th>
+                <th v-for="p in protocols" :key="p.protocol">{{ p.label }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in capabilityTable" :key="i" :class="{ striped: i % 2 === 1 }">
+                <td class="sticky-col sticky-col-1">{{ row.category }}</td>
+                <td class="sticky-col sticky-col-2">{{ row.capability }}</td>
+                <td v-for="p in protocols" :key="p.protocol" class="center">
+                  <el-tag v-if="row[p.protocol]" type="success" size="small">{{ t('common.yes') }}</el-tag>
+                  <el-tag v-else type="info" size="small">{{ t('common.no') }}</el-tag>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </el-card>
 
       <!-- 两两对比 -->
@@ -105,6 +116,56 @@
           </el-table>
         </div>
       </el-card>
+
+      <!-- 双协议对比 -->
+      <el-card shadow="never" class="sub-card" style="margin-top: 20px">
+        <template #header>
+          <span class="sub-title">{{ t('protocolCompare.dualCompare') }}</span>
+        </template>
+        <el-row :gutter="20" style="margin-bottom: 16px">
+          <el-col :span="10">
+            <el-select v-model="dualA" style="width: 100%" @change="onDualChange">
+              <el-option v-for="p in protocols" :key="'a'+p.protocol" :label="p.label" :value="p.protocol" />
+            </el-select>
+          </el-col>
+          <el-col :span="4" style="text-align: center; line-height: 32px">
+            <span style="font-size: 20px">↔</span>
+          </el-col>
+          <el-col :span="10">
+            <el-select v-model="dualB" style="width: 100%" @change="onDualChange">
+              <el-option v-for="p in protocols" :key="'b'+p.protocol" :label="p.label" :value="p.protocol" />
+            </el-select>
+          </el-col>
+        </el-row>
+
+        <div v-if="dualTable.length > 0" class="capability-table">
+          <table class="sticky-table">
+            <thead>
+              <tr>
+                <th class="sticky-col sticky-col-1">{{ t('protocolCompare.category') }}</th>
+                <th class="sticky-col sticky-col-2">{{ t('protocolCompare.capability') }}</th>
+                <th>{{ dualALabel }}</th>
+                <th>{{ dualBLabel }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in dualTable" :key="i" :class="{ striped: i % 2 === 1 }">
+                <td class="sticky-col sticky-col-1">{{ row.category }}</td>
+                <td class="sticky-col sticky-col-2">{{ row.capability }}</td>
+                <td class="center">
+                  <el-tag v-if="row.hasA" type="success" size="small">{{ t('common.yes') }}</el-tag>
+                  <el-tag v-else type="info" size="small">{{ t('common.no') }}</el-tag>
+                </td>
+                <td class="center">
+                  <el-tag v-if="row.hasB" type="success" size="small">{{ t('common.yes') }}</el-tag>
+                  <el-tag v-else type="info" size="small">{{ t('common.no') }}</el-tag>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else style="color: var(--el-text-color-secondary); text-align: center; padding: 20px;">{{ t('protocolCompare.noData') }}</p>
+      </el-card>
     </el-card>
   </div>
 </template>
@@ -153,6 +214,8 @@ const toProtocol = ref('anthropic')
 const compareResult = ref<CompareResult | null>(null)
 const selectedProtocol = ref('openai')
 const selectedCaps = ref<ProtocolCaps | null>(null)
+const dualA = ref('openai')
+const dualB = ref('deepseek')
 
 const categoryLabels: Record<string, string> = {
   core: '核心能力',
@@ -264,6 +327,39 @@ function onCompareChange() {
 function onDetailChange() {
   fetchDetail()
 }
+
+// ── 双协议对比 ──
+const dualALabel = computed(() => protocols.value.find(p => p.protocol === dualA.value)?.label || dualA.value)
+const dualBLabel = computed(() => protocols.value.find(p => p.protocol === dualB.value)?.label || dualB.value)
+
+const dualTable = computed(() => {
+  const protoA = protocols.value.find(p => p.protocol === dualA.value)
+  const protoB = protocols.value.find(p => p.protocol === dualB.value)
+  if (!protoA || !protoB) return []
+
+  const allKeys = new Set<string>()
+  for (const c of protoA.capabilities) allKeys.add(c.key)
+  for (const c of protoB.capabilities) allKeys.add(c.key)
+
+  const capByKeyA = new Map(protoA.capabilities.map(c => [c.key, c]))
+  const capByKeyB = new Map(protoB.capabilities.map(c => [c.key, c]))
+
+  return Array.from(allKeys).map(key => {
+    const cA = capByKeyA.get(key)
+    const cB = capByKeyB.get(key)
+    const info = cA || cB!
+    return {
+      capability: info.label,
+      category: categoryLabels[info.category] || info.category,
+      hasA: capByKeyA.has(key),
+      hasB: capByKeyB.has(key),
+    }
+  })
+})
+
+function onDualChange() {
+  // no async fetch needed — data already in protocols[]
+}
 </script>
 
 <style scoped>
@@ -288,5 +384,57 @@ function onDetailChange() {
 
 .compare-result {
   margin-top: 16px;
+}
+
+/* 能力总览表：原生 table + sticky 固定前两列 */
+.capability-table {
+  overflow-x: auto;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+.sticky-table {
+  border-collapse: collapse;
+  min-width: 900px;
+  width: 100%;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.sticky-table th,
+.sticky-table td {
+  border: 1px solid var(--el-border-color);
+  padding: 8px 12px;
+  white-space: nowrap;
+  background: #fff;
+}
+
+.sticky-table th {
+  background: var(--el-fill-color-light, #f5f7fa);
+  font-weight: 600;
+}
+
+.sticky-table .center {
+  text-align: center;
+}
+
+.sticky-table .striped td {
+  background: var(--el-fill-color-lighter, #fafafa);
+}
+
+/* 前两列 sticky 固定 */
+.sticky-col {
+  position: sticky;
+  z-index: 1;
+}
+.sticky-col-1 {
+  left: 0;
+  width: 120px;
+  min-width: 120px;
+}
+.sticky-col-2 {
+  left: 120px;
+  width: 200px;
+  min-width: 200px;
 }
 </style>

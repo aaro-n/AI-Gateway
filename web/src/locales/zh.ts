@@ -130,6 +130,8 @@ export default {
   key: {
     name: '密钥名称',
     key: 'API 密钥',
+    format: '密钥格式',
+    selectFormat: '请选择厂商类型',
     model: '模型',
     expiresAt: '过期时间',
     createKey: '创建 API 密钥',
@@ -204,7 +206,8 @@ export default {
     editMapping: '编辑映射',
     providerType: '厂商类型',
     modelDisabled: '模型已禁用',
-    testAllMappings: '测试所有映射'
+    testAllMappings: '测试所有映射',
+    duplicateName: '模型名称已存在，请使用其他名称'
   },
   mcp: {
     services: 'MCP服务',
@@ -249,7 +252,7 @@ export default {
   },
   protocolCompare: {
     title: '协议对比',
-    intro: '当客户端使用一种 AI 协议格式（如 Gemini）访问，而后端模型使用另一种协议（如 OpenAI），以下对比表格展示各协议的原生能力以及协议转换时可能丢失或受限的功能。',
+    intro: '当客户端使用一种 AI 协议格式（如 Gemini）访问，而后端模型使用另一种协议（如 OpenAI），以下对比表格展示 OpenAI、Anthropic、Google Gemini、DeepSeek 四大协议的原生能力以及协议转换时可能丢失或受限的功能。',
     capabilityOverview: '能力总览',
     category: '分类',
     capability: '能力/功能',
@@ -266,7 +269,9 @@ export default {
     description: '描述',
     errorHint: '对比数据加载失败，请稍后重试',
     sameProtoDesc: '说明',
-    sameProtoHint: '{name} 协议直通，客户端与后端使用相同协议，所有原生能力均可正常使用，无功能损失。'
+    sameProtoHint: '{name} 协议直通，客户端与后端使用相同协议，所有原生能力均可正常使用，无功能损失。',
+    dualCompare: '双协议对比',
+    noData: '请选择两个协议'
   },
   mcpUsage: {
     stats: '统计',

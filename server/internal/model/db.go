@@ -36,6 +36,7 @@ type Provider struct {
 	OpenAIBaseURL    string `gorm:"column:openai_base_url"`
 	AnthropicBaseURL string `gorm:"column:anthropic_base_url"`
 	GeminiBaseURL    string `gorm:"column:gemini_base_url"`
+	DeepSeekBaseURL  string `gorm:"column:deepseek_base_url"`
 	APIKey           string
 	Enabled          bool   `gorm:"type:boolean;default:true"`
 	Priority         int    `gorm:"default:0"`

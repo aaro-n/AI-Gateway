@@ -173,7 +173,7 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 	if raw.GenerationConfig.MaxOutputTokens != nil {
 		req.MaxTokens = *raw.GenerationConfig.MaxOutputTokens
 	}
-	// 转换 Gemini tools → unified Tools
+	// 转换 Gemini tools → unified Tools (透传 json.RawMessage，保留所有字段)
 	if len(raw.Tools) > 0 {
 		var geminiTools []struct {
 			FunctionDeclarations []struct {
@@ -183,9 +183,10 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			} `json:"functionDeclarations"`
 		}
 		if json.Unmarshal(raw.Tools, &geminiTools) == nil {
+			var unifiedTools []unified.Tool
 			for _, gt := range geminiTools {
 				for _, fd := range gt.FunctionDeclarations {
-					req.Tools = append(req.Tools, unified.Tool{
+					unifiedTools = append(unifiedTools, unified.Tool{
 						Type: "function",
 						Function: unified.FunctionDef{
 							Name:        fd.Name,
@@ -194,6 +195,9 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 						},
 					})
 				}
+			}
+			if b, err := json.Marshal(unifiedTools); err == nil {
+				req.Tools = b
 			}
 		}
 	}
@@ -299,16 +303,23 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 	result["generationConfig"] = genConfig
 
 	if len(req.Tools) > 0 {
-		functionDeclarations := make([]map[string]interface{}, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			functionDeclarations = append(functionDeclarations, map[string]interface{}{
-				"name":        t.Function.Name,
-				"description": t.Function.Description,
-				"parameters":  t.Function.Parameters,
-			})
-		}
-		result["tools"] = []map[string]interface{}{
-			{"functionDeclarations": functionDeclarations},
+		var unifiedTools []unified.Tool
+		if err := json.Unmarshal(req.Tools, &unifiedTools); err == nil {
+			functionDeclarations := make([]map[string]interface{}, 0, len(unifiedTools))
+			for _, t := range unifiedTools {
+				if t.Function.Name != "" {
+					functionDeclarations = append(functionDeclarations, map[string]interface{}{
+						"name":        t.Function.Name,
+						"description": t.Function.Description,
+						"parameters":  t.Function.Parameters,
+					})
+				}
+			}
+			if len(functionDeclarations) > 0 {
+				result["tools"] = []map[string]interface{}{
+					{"functionDeclarations": functionDeclarations},
+				}
+			}
 		}
 	}
 	// 转换 ToolChoice → Gemini toolConfig

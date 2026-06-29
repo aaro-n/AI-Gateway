@@ -164,7 +164,24 @@ const modelForm = reactive({
 })
 
 const modelRules = computed(() => ({
-  name: [{ required: true, message: t('common.required'), trigger: 'blur' }]
+  name: [
+    { required: true, message: t('common.required'), trigger: 'blur' },
+    {
+      validator: (_rule: any, value: string, callback: any) => {
+        if (!value) return callback()
+        const name = value.trim()
+        const exists = models.value.some(
+          (m: Model) => m.name === name && (!editingModel.value || m.id !== editingModel.value.id)
+        )
+        if (exists) {
+          callback(new Error(t('models.duplicateName')))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
 }))
 
 onMounted(() => {
@@ -209,11 +226,12 @@ async function handleModelSubmit() {
   if (!valid) return
 
   submitting.value = true
+  const name = modelForm.name.trim()
   try {
     if (editingModel.value) {
-      await api.put(`/models/${editingModel.value.id}`, { name: modelForm.name, enabled: modelForm.enabled })
+      await api.put(`/models/${editingModel.value.id}`, { name, enabled: modelForm.enabled })
     } else {
-      await api.post('/models', { name: modelForm.name, enabled: modelForm.enabled })
+      await api.post('/models', { name, enabled: modelForm.enabled })
     }
     ElMessage.success(t('common.success'))
     modelDialogVisible.value = false
@@ -226,7 +244,11 @@ async function handleModelSubmit() {
 }
 
 async function handleDeleteModel(id: number) {
-  await ElMessageBox.confirm(t('common.confirm'), t('common.delete'), { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(t('common.confirm'), t('common.delete'), { type: 'warning' })
+  } catch {
+    return // user cancelled
+  }
   await api.delete(`/models/${id}`)
   ElMessage.success(t('common.success'))
   fetchModels()
@@ -234,7 +256,11 @@ async function handleDeleteModel(id: number) {
 
 async function handleBatchDelete() {
   if (selectedIds.value.length === 0) return
-  await ElMessageBox.confirm(t('common.confirm') + ` (${selectedIds.value.length} items)`, t('common.batchDelete'), { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(t('common.confirm') + ` (${selectedIds.value.length} items)`, t('common.batchDelete'), { type: 'warning' })
+  } catch {
+    return // user cancelled
+  }
   try {
     await Promise.all(selectedIds.value.map(id => api.delete(`/models/${id}`)))
     ElMessage.success(t('common.success'))

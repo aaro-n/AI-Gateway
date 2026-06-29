@@ -17,8 +17,7 @@ func (r *Registry) anthropic() *ProtocolCaps {
 			// ── 输出控制 ──
 			{Key: "function_calling", Label: "工具调用 (Tool Use)", Description: "原生 tool_use content block，支持 tool_choice 精确控制（auto/any/tool）", Category: "output"},
 			{Key: "thinking", Label: "扩展思考 (Extended Thinking)", Description: "thinking budget_tokens 参数，Claude 在回答前进行深度思考，支持签名验证和思考过程可见", Category: "output"},
-			{Key: "computer_use", Label: "计算机操作 (Computer Use)", Description: "支持屏幕截图理解和鼠标/键盘操作指令（Beta）", Category: "output"},
-
+			{Key: "computer_use", Label: "计算机操作 (Computer Use)", Description: "支持屏幕截图理解和鼠标/键盘操作指令（Beta）", Category: "output"}, {Key: "web_search", Label: "网页搜索 (Web Search)", Description: "通过 tool_use type=web_search_20250305 激活服务端网页搜索", Category: "output"},
 			// ── 输入控制 ──
 			{Key: "temperature_control", Label: "Temperature 控制", Description: "控制输出随机性 (0-1)，支持接近 0 的确定性输出", Category: "input"},
 			{Key: "top_p", Label: "Top-P (核采样)", Description: "nucleus sampling 概率阈值控制", Category: "input"},
@@ -34,6 +33,7 @@ func (r *Registry) anthropic() *ProtocolCaps {
 			{Key: "prompt_caching", Label: "Prompt 缓存", Description: "支持标记可缓存内容，减少重复上下文的 token 消耗和延迟（cache_control）", Category: "advanced"},
 			{Key: "citations", Label: "文本引用 (Citations)", Description: "自动为回答中的事实性陈述添加源文档引用", Category: "advanced"},
 			{Key: "stream_events", Label: "流式事件类型", Description: "丰富的 SSE 事件类型：message_start/delta/stop, content_block_start/delta/stop, ping", Category: "advanced"},
+			{Key: "disable_parallel_tool_use", Label: "禁用并行工具调用", Description: "disable_parallel_tool_use 参数可强制串行执行工具，避免竞态", Category: "advanced"},
 		},
 	}
 }

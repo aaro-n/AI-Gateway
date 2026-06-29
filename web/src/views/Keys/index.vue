@@ -13,7 +13,20 @@
       <el-table :data="keys" stripe v-loading="loading" @selection-change="handleSelectionChange" :default-sort="defaultSort" @sort-change="handleSortChange">
         <el-table-column type="selection" width="50" />
         <el-table-column prop="name" :label="t('key.name')" width="180" sortable />
-        <el-table-column prop="key" :label="t('key.key')" width="240" />
+        <el-table-column prop="key" :label="t('key.key')" width="280">
+          <template #default="{ row }">
+            <div style="display: flex; align-items: center;">
+              <span>{{ row.key }}</span>
+              <el-tag
+                v-if="getKeyProviderLabel(row)"
+                :type="getKeyProviderType(row)"
+                size="small"
+                effect="plain"
+                style="margin-left: 16px;"
+              >{{ getKeyProviderLabel(row) }}</el-tag>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('key.model')" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
           <template #default="{ row }">
             <span v-if="!row.models || row.models.length === 0" style="color: #999">{{ t('key.allModels') }}</span>
@@ -59,8 +72,8 @@
          <el-form-item :label="t('key.name')" required>
            <el-input v-model="form.name" />
          </el-form-item>
-         <el-form-item :label="'密钥格式'" required>
-           <el-select v-model="form.format" placeholder="请选择模型厂商" style="width: 100%" :disabled="!!editingId">
+         <el-form-item :label="t('key.format')" required>
+           <el-select v-model="form.format" :placeholder="editingId ? undefined : t('key.selectFormat')" style="width: 100%" :disabled="!!editingId">
              <el-option
                v-for="p in protocols"
                :key="p.name"
@@ -159,8 +172,9 @@ async function showDialog(key?: any) {
   if (key) {
     form.name = key.name || ''
     form.access_mode = key.access_mode || 'mapping'
-    // 编辑时仅修改名称，格式保持可选
-    form.format = ''
+    // 编辑时显示当前格式，但不可修改
+    const fmtKeys = key.formats ? Object.keys(key.formats) : []
+    form.format = fmtKeys.length > 0 ? fmtKeys[0] : ''
   } else {
     form.name = ''
     form.access_mode = 'mapping'
@@ -203,6 +217,8 @@ async function handleUpdateKey(row: any) {
       format = 'gemini'
     } else if (row.key && row.key.startsWith('sk-ant-')) {
       format = 'anthropic'
+    } else if (row.key && row.key.startsWith('sk-')) {
+      format = 'openai'
     }
     
     const resetRes = await api.post(`/keys/${row.id}/reset`, { format })
@@ -215,6 +231,27 @@ async function handleUpdateKey(row: any) {
       ElMessage.error(e.response?.data?.error || t('common.error'))
     }
   }
+}
+
+const providerLabels: Record<string, { label: string; type: string }> = {
+  openai: { label: 'OpenAI', type: 'success' },
+  anthropic: { label: 'Anthropic', type: 'primary' },
+  gemini: { label: 'Gemini', type: 'warning' },
+  deepseek: { label: 'DeepSeek', type: 'danger' },
+}
+
+function getKeyProviderLabel(row: any): string {
+  const fmtKeys = row.formats ? Object.keys(row.formats) : []
+  const fmt = fmtKeys[0]
+  if (!fmt) return ''
+  return providerLabels[fmt]?.label || fmt.toUpperCase()
+}
+
+function getKeyProviderType(row: any): string {
+  const fmtKeys = row.formats ? Object.keys(row.formats) : []
+  const fmt = fmtKeys[0]
+  if (!fmt) return 'info'
+  return providerLabels[fmt]?.type || 'info'
 }
 
 async function toggleEnabled(row: any) {

@@ -11,7 +11,8 @@
         <el-descriptions-item :label="t('provider.apiStyles')">
           <el-tag v-if="provider?.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
           <el-tag v-if="provider?.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
-          <el-tag v-if="provider?.gemini_base_url" type="warning">Gemini</el-tag>
+          <el-tag v-if="provider?.gemini_base_url" type="warning" style="margin-right: 4px">Gemini</el-tag>
+          <el-tag v-if="provider?.deepseek_base_url" type="danger">DeepSeek</el-tag>
         </el-descriptions-item>
         <el-descriptions-item :label="t('common.status')">
           <el-tag :type="provider?.enabled ? 'success' : 'info'">
@@ -91,7 +92,7 @@
     <el-dialog v-model="dialogVisible" :title="editingModel ? t('common.edit') : t('provider.addModel')" width="500px">
       <el-form :model="form" :rules="rules" ref="formRef" label-width="auto">
         <el-form-item :label="t('provider.modelId')" prop="model_id">
-          <el-input v-model="form.model_id" />
+          <el-input v-model="form.model_id" :disabled="editingModel && editingModel.source === 'sync'" />
         </el-form-item>
         <el-form-item :label="t('common.name')">
           <el-input v-model="form.display_name" />

@@ -24,6 +24,7 @@ import (
 
 	// 协议插件（init() 自注册）
 	_ "ai-gateway/internal/protocols/anthropic"
+	_ "ai-gateway/internal/protocols/deepseek"
 	_ "ai-gateway/internal/protocols/gemini"
 	_ "ai-gateway/internal/protocols/openai"
 )
