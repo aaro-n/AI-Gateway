@@ -28,7 +28,7 @@ func (r *Registry) deepseek() *ProtocolCaps {
 			{Key: "max_tokens", Label: "最大 Token 限制", Description: "max_tokens / max_completion_tokens 精确控制输出长度", Category: "input"},
 
 			// ── 多模态 ──
-			{Key: "vision", Label: "视觉识别 (Vision)", Description: "支持图片输入（URL 或 Base64），理解图像内容", Category: "advanced"},
+			// DeepSeek 目前主流线上模型(V3/R1)均为纯文本或纯推理大模型，不支持 Vision 视觉等多模态输入。
 
 			// ── 高级功能 ──
 			{Key: "stream_options", Label: "流式用量统计", Description: "stream_options.include_usage 在流式结束时返回 token 用量", Category: "advanced"},

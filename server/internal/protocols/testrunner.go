@@ -1,12 +1,8 @@
 package protocols
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http/httptest"
 	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/registry"
 )
@@ -37,11 +33,6 @@ func RunTest(protocol, openaiURL, anthropicURL, geminiURL, deepseekURL, apiKey, 
 	if upProto != protocol {
 		callMethod = "convert"
 	}
-
-	w := httptest.NewRecorder()
-	testCtx, _ := gin.CreateTestContext(w)
-	testCtx.Request = httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
-	testCtx.Request.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
 
@@ -104,10 +95,10 @@ func buildTestBody(protocol, modelID string) []byte {
 		}
 	} else {
 		body = map[string]interface{}{
-			"model":      modelID,
-			"messages":   []map[string]string{{"role": "user", "content": "简短介绍一下自己。"}},
-			"max_tokens": 1,
-			"stream":     false,
+			"model":                 modelID,
+			"messages":              []map[string]string{{"role": "user", "content": "简短介绍一下自己。"}},
+			"max_completion_tokens": 10,
+			"stream":                false,
 		}
 	}
 	b, _ := json.Marshal(body)

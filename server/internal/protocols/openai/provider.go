@@ -46,6 +46,48 @@ type openAIModelEntry struct {
 	} `json:"capabilities,omitempty"`
 }
 
+// openAIModelDefaults 为 OpenAI 标准 API 不返回 context_window 的情况提供默认值。
+// 数据来源：https://platform.openai.com/docs/models (Core Generative Models)
+// 不在本表中的模型同步时会被过滤舍弃（非核心对话模型如音频/图像/embedding 等）。
+var openAIModelDefaults = map[string]struct {
+	contextWindow int
+	maxOutput     int
+	vision        bool
+}{
+	// GPT-5.2 系列
+	"gpt-5.2-pro": {400000, 128000, true},
+	"gpt-5.2":     {400000, 128000, true},
+	// GPT-5.1 系列
+	"gpt-5.1":           {400000, 128000, true},
+	"gpt-5.1-codex-max": {400000, 128000, true},
+	"gpt-5.1-codex":     {400000, 128000, true},
+	// GPT-5 系列
+	"gpt-5":       {400000, 128000, true},
+	"gpt-5-codex": {400000, 128000, true},
+	"gpt-5-mini":  {400000, 128000, true},
+	"gpt-5-nano":  {400000, 128000, true},
+	// GPT-4.1 系列
+	"gpt-4.1":      {1047576, 32768, true},
+	"gpt-4.1-mini": {1047576, 32768, true},
+	"gpt-4.1-nano": {1047576, 32768, true},
+	// GPT-4o 系列
+	"gpt-4o":      {128000, 16384, true},
+	"gpt-4o-mini": {128000, 16384, true},
+	// GPT-4 系列
+	"gpt-4":       {8192, 8192, false},
+	"gpt-4-turbo": {128000, 4096, true},
+	// GPT-3.5
+	"gpt-3.5-turbo": {16385, 4096, false},
+	// o 系列推理模型
+	"o1":         {200000, 100000, true},
+	"o1-mini":    {128000, 65536, false},
+	"o1-preview": {128000, 32768, false},
+	"o1-pro":     {200000, 100000, true},
+	"o3":         {200000, 100000, true},
+	"o3-mini":    {200000, 100000, false},
+	"o4-mini":    {200000, 100000, true},
+}
+
 func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", p.cfg.BaseURL+"/models", nil)
@@ -101,17 +143,27 @@ func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, 
 			maxOutput = m.MaxTokens
 		}
 
-		// 视觉支持：从 capabilities 读取，或根据模型名推断
+		// 视觉支持：从 capabilities 读取
 		supportsVision := false
 		if m.Capabilities != nil {
 			supportsVision = m.Capabilities.Vision
 		}
+
+		// 核心对话模型白名单：用官方默认值填充 API 未返回的字段，
+		// 不在白名单中的模型（音频/图像/embedding/旧版快照等）直接舍弃
+		def, inDefaults := openAIModelDefaults[m.ID]
+		if !inDefaults {
+			continue
+		}
+
+		if contextWindow == 0 {
+			contextWindow = def.contextWindow
+		}
+		if maxOutput == 0 {
+			maxOutput = def.maxOutput
+		}
 		if !supportsVision {
-			supportsVision = strings.Contains(m.ID, "vision") ||
-				strings.Contains(m.ID, "gpt-4o") ||
-				strings.Contains(m.ID, "gpt-4-turbo") ||
-				strings.Contains(m.ID, "claude") ||
-				strings.Contains(m.ID, "gemini")
+			supportsVision = def.vision
 		}
 
 		models = append(models, registry.ProviderModel{
@@ -295,7 +347,7 @@ func (p *OpenAIProvider) unifiedToOpenAI(req *unified.Request) map[string]interf
 		"stream":   req.Stream,
 	}
 	if req.MaxTokens > 0 {
-		result["max_tokens"] = req.MaxTokens
+		result["max_completion_tokens"] = req.MaxTokens
 	}
 	if req.Temperature != nil {
 		result["temperature"] = *req.Temperature

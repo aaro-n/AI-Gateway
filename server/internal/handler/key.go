@@ -590,6 +590,8 @@ func keyFormatToProtocol(format string) string {
 		return "anthropic"
 	case "gemini":
 		return "gemini"
+	case "deepseek":
+		return "deepseek"
 	default:
 		return ""
 	}
@@ -621,6 +623,7 @@ func (h *KeyHandler) ListProviders(c *gin.Context) {
 		"openai":    "openai_base_url != ''",
 		"anthropic": "anthropic_base_url != ''",
 		"gemini":    "gemini_base_url != ''",
+		"deepseek":  "deepseek_base_url != ''",
 	}
 	if cond, ok := fieldMap[protocol]; ok {
 		model.DB.Where("enabled = ?", true).Where(cond).Find(&providers)
@@ -755,12 +758,35 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 		selectedMap[id] = true
 	}
 
-	// 获取所有启用的 provider 下的可用 provider_models
+	// 获取 key 格式确定协议类型
+	var keyFormats []model.KeyFormat
+	model.DB.Where("key_id = ?", keyID).Find(&keyFormats)
+	keyFormat := "openai"
+	for _, kf := range keyFormats {
+		if kf.Format != "openai" {
+			keyFormat = kf.Format
+			break
+		}
+	}
+	protocol := keyFormatToProtocol(keyFormat)
+
+	// 按协议过滤：只获取匹配协议的 provider_models
+	fieldMap := map[string]string{
+		"openai":    "providers.openai_base_url != ''",
+		"anthropic": "providers.anthropic_base_url != ''",
+		"gemini":    "providers.gemini_base_url != ''",
+		"deepseek":  "providers.deepseek_base_url != ''",
+	}
+
 	var pms []model.ProviderModel
-	model.DB.Preload("Provider").
+	query := model.DB.Preload("Provider").
 		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true).
-		Where("provider_models.is_available = ?", true).
-		Find(&pms)
+		Where("provider_models.is_available = ?", true)
+
+	if cond, ok := fieldMap[protocol]; ok {
+		query = query.Where(cond)
+	}
+	query.Find(&pms)
 
 	result := make([]providerModelWithStatusResponse, 0, len(pms))
 	for _, pm := range pms {

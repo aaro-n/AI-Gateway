@@ -184,13 +184,13 @@ func checkPartialSupport(key, toProtocol string) string {
 			"openai": "OpenAI o1 系列支持 reasoning_effort，但与 Anthropic extended thinking 机制不同，可能丢失思考深度控制",
 		},
 		"json_mode": {
-			"anthropic": "Anthropic 无原生 JSON 模式，可通过 prompt 引导，但无法保证 100% 有效 JSON",
+			"anthropic": "Anthropic 最新协议已原生支持 JSON 模式或通过强制 tool 工具调用的方式输出结构化 JSON，旧版客户端转换时会降级",
 		},
 		"temperature_control": {
-			"anthropic": "Anthropic 不支持 temperature 参数，只能通过其他方式间接影响输出随机性",
+			// Both OpenAI, Anthropic, Gemini, and DeepSeek support temperature
 		},
 		"top_p": {
-			"anthropic": "Anthropic 不支持 top_p 参数",
+			// Both OpenAI, Anthropic, Gemini, and DeepSeek support top_p
 		},
 		"logprobs": {
 			"anthropic": "Anthropic 不支持 logprobs（对数概率）输出",
@@ -198,6 +198,7 @@ func checkPartialSupport(key, toProtocol string) string {
 		},
 		"seed": {
 			"anthropic": "Anthropic 不支持 seed 参数（确定性输出）",
+			"deepseek":  "DeepSeek 不支持 seed 参数（确定性输出）",
 		},
 		"stop_sequences": {
 			// Custom stop sequences - Anthropic/Gemini support differently
@@ -209,6 +210,24 @@ func checkPartialSupport(key, toProtocol string) string {
 		"presence_penalty": {
 			"anthropic": "Anthropic 不支持 presence_penalty",
 			"gemini":    "Gemini 不支持 presence_penalty",
+		},
+		"n_choices": {
+			"anthropic": "Anthropic 不支持多候选回复（n 参数），每次调用仅能产生一个候选回答",
+			"deepseek":  "DeepSeek 不支持多候选回复（n 参数），每次调用仅能产生一个候选回答",
+		},
+		"audio_input": {
+			"anthropic": "Anthropic 暂不支持音频输入，转换时音频输入会被忽略或报错",
+			"deepseek":  "DeepSeek 暂不支持音频输入，转换时音频输入会被忽略或报错",
+		},
+		"video_input": {
+			"openai":    "OpenAI 目前不直接支持原生视频文件流输入，只能通过按帧提取图片转换输入",
+			"anthropic": "Anthropic 目前不直接支持原生视频文件流输入，只能通过按帧提取图片转换输入",
+			"deepseek":  "DeepSeek 暂不支持视频输入，转换时视频会被忽略或报错",
+		},
+		"predicted_outputs": {
+			"anthropic": "Anthropic 不支持预测输出加速 (prediction 参数)",
+			"gemini":    "Gemini 不支持预测输出加速 (prediction 参数)",
+			"deepseek":  "DeepSeek 不支持预测输出加速 (prediction 参数)",
 		},
 	}
 	if m, ok := partials[key]; ok {

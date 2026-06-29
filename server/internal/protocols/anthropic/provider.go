@@ -245,7 +245,23 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 			continue
 		}
 
-		var blocks []unified.ContentBlock
+		type anthropicSource struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		}
+		type anthropicBlock struct {
+			Type      string           `json:"type"`
+			Text      string           `json:"text,omitempty"`
+			ID        string           `json:"id,omitempty"`
+			Name      string           `json:"name,omitempty"`
+			Input     json.RawMessage  `json:"input,omitempty"`
+			ToolUseID string           `json:"tool_use_id,omitempty"`
+			Content   json.RawMessage  `json:"content,omitempty"`
+			Source    *anthropicSource `json:"source,omitempty"`
+		}
+
+		var blocks []anthropicBlock
 		if json.Unmarshal(m.Content, &blocks) != nil {
 			um.Content = m.Content
 			msgs = append(msgs, um)
@@ -256,12 +272,28 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 		textParts := make([]string, 0)
 		var toolCalls []unified.ToolCall
 		var toolResults []unified.Message
+		var unifiedBlocks []unified.ContentBlock
+		var hasImage bool
+
 		for _, b := range blocks {
 			switch b.Type {
 			case "text":
 				textParts = append(textParts, b.Text)
+				unifiedBlocks = append(unifiedBlocks, unified.ContentBlock{
+					Type: "text",
+					Text: b.Text,
+				})
 			case "image":
-				// 保留为 image block
+				if b.Source != nil && b.Source.Type == "base64" {
+					hasImage = true
+					dataURL := fmt.Sprintf("data:%s;base64,%s", b.Source.MediaType, b.Source.Data)
+					unifiedBlocks = append(unifiedBlocks, unified.ContentBlock{
+						Type: "image_url",
+						ImageURL: &unified.ImageURL{
+							URL: dataURL,
+						},
+					})
+				}
 			case "tool_use":
 				args, _ := json.Marshal(b.Input)
 				toolCalls = append(toolCalls, unified.ToolCall{
@@ -282,9 +314,12 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 			}
 		}
 
-		if len(textParts) > 0 {
+		if hasImage {
+			um.Content = unified.BlocksContent(unifiedBlocks)
+		} else if len(textParts) > 0 {
 			um.Content = unified.StringContent(strings.Join(textParts, "\n"))
 		}
+
 		if len(toolCalls) > 0 {
 			um.ToolCalls = toolCalls
 		}

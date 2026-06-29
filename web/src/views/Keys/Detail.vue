@@ -417,6 +417,11 @@ onMounted(() => {
   fetchKey()
 })
 
+// 切换 key 时重置厂商加载缓存，以匹配新 key 的协议格式
+watch(() => route.params.id, () => {
+  directProvidersLoaded = false
+})
+
 watch(activeTab, (newTab) => {
   if (newTab === 'providers' && providerModels.value.length === 0) fetchProviderModels()
   if (newTab === 'models' && models.value.length === 0) fetchModels()
@@ -691,7 +696,8 @@ async function showProviderModelDialog() {
   if (!directProvidersLoaded) {
     providerModelDialogLoading.value = true
     try {
-      const res = await api.get('/providers')
+      // 使用 key 的厂商过滤接口，只显示与密钥格式匹配的厂商
+      const res = await api.get(`/keys/${keyId}/providers`)
       directProviders.value = (res.data.providers || []).sort((a: any, b: any) => a.name.localeCompare(b.name))
       directProvidersLoaded = true
     } catch { /* ignore */ }

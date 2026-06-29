@@ -143,20 +143,51 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			role = "assistant"
 		}
 
-		// 合并 parts 为 content
-		textParts := make([]string, 0)
+		// 合并 parts 为 content blocks
+		var blocks []unified.ContentBlock
+		var hasImage bool
 		for _, partRaw := range c.Parts {
 			var part map[string]interface{}
 			if json.Unmarshal(partRaw, &part) != nil {
 				continue
 			}
 			if text, ok := part["text"].(string); ok {
-				textParts = append(textParts, text)
+				blocks = append(blocks, unified.ContentBlock{
+					Type: "text",
+					Text: text,
+				})
+			} else if inlineData, ok := part["inlineData"].(map[string]interface{}); ok {
+				mimeType, _ := inlineData["mimeType"].(string)
+				data, _ := inlineData["data"].(string)
+				if mimeType != "" && data != "" {
+					hasImage = true
+					dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, data)
+					blocks = append(blocks, unified.ContentBlock{
+						Type: "image_url",
+						ImageURL: &unified.ImageURL{
+							URL: dataURL,
+						},
+					})
+				}
 			}
 		}
+
+		var rawMsg json.RawMessage
+		if hasImage {
+			rawMsg = unified.BlocksContent(blocks)
+		} else {
+			var textParts []string
+			for _, b := range blocks {
+				if b.Type == "text" {
+					textParts = append(textParts, b.Text)
+				}
+			}
+			rawMsg = unified.StringContent(strings.Join(textParts, "\n"))
+		}
+
 		msgs = append(msgs, unified.Message{
 			Role:    role,
-			Content: unified.StringContent(strings.Join(textParts, "\n")),
+			Content: rawMsg,
 		})
 	}
 

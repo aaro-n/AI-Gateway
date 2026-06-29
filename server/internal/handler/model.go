@@ -79,6 +79,7 @@ type providerBasicResponse struct {
 	OpenAIBaseURL    string `json:"openai_base_url"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
 	GeminiBaseURL    string `json:"gemini_base_url"`
+	DeepSeekBaseURL  string `json:"deepseek_base_url"`
 }
 
 func NewModelHandler() *ModelHandler {
@@ -504,6 +505,7 @@ func toMappingResponse(m model.ModelMapping) mappingResponse {
 			OpenAIBaseURL:    m.Provider.OpenAIBaseURL,
 			AnthropicBaseURL: m.Provider.AnthropicBaseURL,
 			GeminiBaseURL:    m.Provider.GeminiBaseURL,
+			DeepSeekBaseURL:  m.Provider.DeepSeekBaseURL,
 		}
 	}
 

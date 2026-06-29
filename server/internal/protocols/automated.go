@@ -23,6 +23,7 @@ func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepsee
 		{"deepseek", deepseekURL},
 	}
 
+	// 1. 优先尝试用户已配置的自定义端点
 	for _, ep := range endpoints {
 		if ep.baseURL == "" {
 			continue
@@ -39,65 +40,47 @@ func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepsee
 		if err != nil || len(registryModels) == 0 {
 			continue
 		}
-		// 转换 registry.ProviderModel → model.ProviderModel
-		models := make([]model.ProviderModel, len(registryModels))
-		for i, rm := range registryModels {
-			models[i] = model.ProviderModel{
-				ProviderID:     rm.ProviderID,
-				ModelID:        rm.ModelID,
-				DisplayName:    rm.DisplayName,
-				OwnedBy:        rm.OwnedBy,
-				ContextWindow:  rm.ContextWindow,
-				MaxOutput:      rm.MaxOutput,
-				InputPrice:     rm.InputPrice,
-				OutputPrice:    rm.OutputPrice,
-				SupportsVision: rm.SupportsVision,
-				SupportsTools:  rm.SupportsTools,
-				SupportsStream: rm.SupportsStream,
-				IsAvailable:    rm.IsAvailable,
-				Source:         rm.Source,
-			}
-		}
-		return models, nil
+		return convertModels(registryModels), nil
 	}
 
-	// 兜底：遍历所有已注册端点
+	// 2. 兜底：尝试使用注册表中的默认官方端点 (DefaultBaseURL)
 	for _, ep := range endpoints {
-		if ep.baseURL == "" {
-			continue
-		}
 		desc, ok := registry.Get(ep.name)
-		if !ok || desc.NewProvider == nil {
+		if !ok || desc.NewProvider == nil || desc.DefaultBaseURL == "" {
 			continue
 		}
 		prov := desc.NewProvider(&registry.Config{
-			BaseURL: ep.baseURL,
+			BaseURL: desc.DefaultBaseURL,
 			APIKey:  apiKey,
 		})
 		registryModels, err := prov.SyncModels(providerID)
-		if err != nil {
+		if err != nil || len(registryModels) == 0 {
 			continue
 		}
-		models := make([]model.ProviderModel, len(registryModels))
-		for i, rm := range registryModels {
-			models[i] = model.ProviderModel{
-				ProviderID:     rm.ProviderID,
-				ModelID:        rm.ModelID,
-				DisplayName:    rm.DisplayName,
-				OwnedBy:        rm.OwnedBy,
-				ContextWindow:  rm.ContextWindow,
-				MaxOutput:      rm.MaxOutput,
-				InputPrice:     rm.InputPrice,
-				OutputPrice:    rm.OutputPrice,
-				SupportsVision: rm.SupportsVision,
-				SupportsTools:  rm.SupportsTools,
-				SupportsStream: rm.SupportsStream,
-				IsAvailable:    rm.IsAvailable,
-				Source:         rm.Source,
-			}
-		}
-		return models, nil
+		return convertModels(registryModels), nil
 	}
 
 	return nil, fmt.Errorf("no valid models found")
+}
+
+func convertModels(registryModels []registry.ProviderModel) []model.ProviderModel {
+	models := make([]model.ProviderModel, len(registryModels))
+	for i, rm := range registryModels {
+		models[i] = model.ProviderModel{
+			ProviderID:     rm.ProviderID,
+			ModelID:        rm.ModelID,
+			DisplayName:    rm.DisplayName,
+			OwnedBy:        rm.OwnedBy,
+			ContextWindow:  rm.ContextWindow,
+			MaxOutput:      rm.MaxOutput,
+			InputPrice:     rm.InputPrice,
+			OutputPrice:    rm.OutputPrice,
+			SupportsVision: rm.SupportsVision,
+			SupportsTools:  rm.SupportsTools,
+			SupportsStream: rm.SupportsStream,
+			IsAvailable:    rm.IsAvailable,
+			Source:         rm.Source,
+		}
+	}
+	return models
 }

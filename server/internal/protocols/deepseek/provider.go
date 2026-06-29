@@ -425,22 +425,31 @@ func (p *DeepSeekProvider) FormatUnified(resp *unified.Response, events <-chan u
 					deltaMap["role"] = ev.Delta.Role
 				}
 
-				// 处理 reasoning_content：包裹为 <think>...</think>
+				// 支持原生 reasoning_content
+				if ev.Delta.ReasoningContent != "" {
+					deltaMap["reasoning_content"] = ev.Delta.ReasoningContent
+				}
+
+				// 处理 reasoning_content 混合 content：包裹为 <think>...</think>
+				var contentText string
 				if ev.Delta.ReasoningContent != "" {
 					thinkText := ev.Delta.ReasoningContent
 					if !thinkStarted {
 						thinkText = "<think>" + thinkText
 						thinkStarted = true
 					}
-					deltaMap["content"] = thinkText
-				} else if ev.Delta.Content != "" {
+					contentText = thinkText
+				}
+				if ev.Delta.Content != "" {
 					if thinkStarted && !thinkEnded {
-						// 思维链结束，先输出 </think>
-						deltaMap["content"] = "</think>\n" + ev.Delta.Content
+						contentText += "</think>\n" + ev.Delta.Content
 						thinkEnded = true
 					} else {
-						deltaMap["content"] = ev.Delta.Content
+						contentText += ev.Delta.Content
 					}
+				}
+				if contentText != "" {
+					deltaMap["content"] = contentText
 				}
 
 				if len(ev.Delta.ToolCalls) > 0 {
@@ -470,6 +479,27 @@ func (p *DeepSeekProvider) FormatUnified(resp *unified.Response, events <-chan u
 				usage.CacheMissTokens = ev.Usage.CacheMissTokens
 			}
 		case unified.EventDone:
+			if thinkStarted && !thinkEnded {
+				// 兜底输出闭合标签
+				chunk := map[string]interface{}{
+					"id":     id,
+					"object": "chat.completion.chunk",
+					"choices": []map[string]interface{}{
+						{
+							"index": 0,
+							"delta": map[string]interface{}{
+								"content": "</think>\n",
+							},
+							"finish_reason": nil,
+						},
+					},
+				}
+				data, _ := json.Marshal(chunk)
+				fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+				c.Writer.Flush()
+				thinkEnded = true
+			}
+
 			chunk := map[string]interface{}{
 				"id":     id,
 				"object": "chat.completion.chunk",
@@ -499,6 +529,9 @@ func (p *DeepSeekProvider) buildDeepSeekMessage(resp *unified.Response) map[stri
 	}
 	if content != "" {
 		msg["content"] = content
+	}
+	if resp.ReasoningContent != "" {
+		msg["reasoning_content"] = resp.ReasoningContent
 	}
 	if len(resp.ToolCalls) > 0 {
 		msg["tool_calls"] = resp.ToolCalls
