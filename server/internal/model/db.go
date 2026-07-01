@@ -457,6 +457,10 @@ func InitDB(
 		return err
 	}
 
+	// 初始化旧记录的 enabled 字段（NULL/0 → true）
+	DB.Exec("UPDATE key_models SET enabled = 1 WHERE enabled IS NULL OR enabled = 0")
+	DB.Exec("UPDATE key_provider_models SET enabled = 1 WHERE enabled IS NULL OR enabled = 0")
+
 	if err := migrateKeyFormats(); err != nil {
 		return err
 	}

@@ -520,10 +520,13 @@ async function fetchPrompts() {
 }
 
 async function toggleModel(row: any) {
+  const prev = row.enabled
+  row.enabled = !prev
   try {
     const res = await api.put(`/keys/${keyId}/models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
+    row.enabled = prev
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
@@ -539,10 +542,13 @@ async function removeModel(row: any) {
 }
 
 async function toggleProviderModel(row: any) {
+  const prev = row.enabled
+  row.enabled = !prev
   try {
     const res = await api.put(`/keys/${keyId}/provider-models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
+    row.enabled = prev
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
