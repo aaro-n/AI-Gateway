@@ -389,18 +389,6 @@ const toolsLoading = ref(false)
 const resourcesLoading = ref(false)
 const promptsLoading = ref(false)
 
-// 跟踪用户手动删除的模型 ID（localStorage 持久化，刷新后仍隐藏）
-function loadHidden(storageKey: string): number[] {
-  try { const raw = localStorage.getItem(storageKey); return raw ? JSON.parse(raw) : [] } catch { return [] }
-}
-function saveHidden(storageKey: string, ids: number[]) {
-  localStorage.setItem(storageKey, JSON.stringify(ids))
-}
-const hiddenProviderStorageKey = `key-${keyId}-hidden-providers`
-const hiddenModelStorageKey = `key-${keyId}-hidden-models`
-const hiddenProviderIds = ref<number[]>(loadHidden(hiddenProviderStorageKey))
-const hiddenModelIds = ref<number[]>(loadHidden(hiddenModelStorageKey))
-
 const enablingModels = ref(false)
 const enablingProviderModels = ref(false)
 const disablingProviderModels = ref(false)
@@ -483,7 +471,7 @@ async function fetchModels() {
   modelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/models`)
-    models.value = (res.data.models || []).filter((m: any) => !hiddenModelIds.value.includes(m.id))
+    models.value = res.data.models || []
   } finally {
     modelsLoading.value = false
   }
@@ -493,8 +481,7 @@ async function fetchProviderModels() {
   providerModelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/provider-models`)
-    // 只显示未被删除的模型（hiddenProviderIds 记录已删除的 ID）
-    providerModels.value = (res.data.models || []).filter((m: any) => !hiddenProviderIds.value.includes(m.id))
+    providerModels.value = res.data.models || []
   } finally {
     providerModelsLoading.value = false
   }
@@ -547,10 +534,7 @@ async function toggleModel(row: any) {
 async function removeModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/models/${row.id}`)
-    // 从表格移除，但不影响后端数据（后端下次仍返回，但我们过滤掉）
     models.value = models.value.filter((m: any) => m.id !== row.id)
-    hiddenModelIds.value = [...hiddenModelIds.value, row.id]
-    saveHidden(hiddenModelStorageKey, hiddenModelIds.value)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -574,9 +558,6 @@ async function toggleProviderModel(row: any) {
 async function removeProviderModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
-    // 记录为已删除，下次 fetch 时过滤掉
-    hiddenProviderIds.value = [...hiddenProviderIds.value, row.id]
-    saveHidden(hiddenProviderStorageKey, hiddenProviderIds.value)
     providerModels.value = providerModels.value.filter((m: any) => m.id !== row.id)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
@@ -688,21 +669,10 @@ async function enableAllProviderModels() {
 
 async function disableAllProviderModels() {
   disablingProviderModels.value = true
-  let errorMsg = ''
   try {
-    for (const m of providerModels.value) {
-      if (m.selected) {
-        try {
-          await api.delete(`/keys/${keyId}/provider-models/${m.id}`)
-          m.selected = false
-        } catch (e: any) {
-          errorMsg = e.response?.data?.error || t('common.error')
-          break
-        }
-      }
-    }
-    if (!errorMsg) ElMessage.success(t('common.success'))
-    else ElMessage.error(errorMsg)
+    await api.delete(`/keys/${keyId}/provider-models`)
+    ElMessage.success(t('common.success'))
+    await fetchProviderModels()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -769,8 +739,6 @@ async function addSelectedProviderModels() {
       try {
         await api.post(`/keys/${keyId}/provider-models/${pmid}`)
         // 如果之前被删除过，从 hidden 中移除
-        hiddenProviderIds.value = hiddenProviderIds.value.filter(id => id !== pmid)
-        saveHidden(hiddenProviderStorageKey, hiddenProviderIds.value)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
@@ -825,8 +793,6 @@ async function addSelectedModels() {
     for (const mid of selectedModelIDs.value) {
       try {
         await api.post(`/keys/${keyId}/models/${mid}`)
-        hiddenModelIds.value = hiddenModelIds.value.filter(id => id !== mid)
-        saveHidden(hiddenModelStorageKey, hiddenModelIds.value)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
