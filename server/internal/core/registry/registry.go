@@ -98,6 +98,31 @@ type Provider interface {
 }
 
 // =============================================================================
+// Inbound / Outbound — 可选的职责分离接口 (AxonHub 风格)
+//
+// 如果协议实现了 Inbound 和 Outbound，中间件优先使用分离接口；
+// 否则回退到 Provider 的 ToUnified/FromUnified/FormatUnified 方法。
+// =============================================================================
+
+// Inbound 处理客户端请求解析和响应格式化（面向客户端）。
+type Inbound interface {
+	// ParseRequest 将客户端原生请求体解析为 unified.Request。
+	// modelID 是路由后的目标上游模型名。
+	ParseRequest(body []byte, modelID string) (*unified.Request, error)
+
+	// FormatResponse 将 unified 响应/流格式化为客户端原生格式。
+	FormatResponse(resp *unified.Response, events <-chan unified.StreamEvent, dst *gin.Context, usage *Usage) error
+}
+
+// Outbound 处理 unified → 上游原生格式的转换和调用（面向上游）。
+type Outbound interface {
+	// BuildRequest 将 unified.Request 转换为上游原生 HTTP 请求并调用。
+	// 非流式：返回 *unified.Response；流式：返回 <-chan unified.StreamEvent。
+	// 二者通过 req.Stream 字段判断。
+	BuildRequest(req *unified.Request) (*unified.Response, <-chan unified.StreamEvent, error)
+}
+
+// =============================================================================
 // 测试接口 — 每个协议必须提供
 // =============================================================================
 

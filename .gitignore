@@ -1,2 +1,5 @@
 /.opencode/
 data.db
+server/data.db
+server/bin/
+other/

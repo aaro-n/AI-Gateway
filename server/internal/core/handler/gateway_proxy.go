@@ -125,6 +125,11 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	}
 	unifiedReq.SourceProtocol = protocolName
 
+	// Gemini Stream 检测（Gemini 通过 URL 区分流式，body 中无 Stream 字段）
+	if protocolName == "gemini" && strings.Contains(c.Request.URL.Path, "streamGenerateContent") {
+		unifiedReq.Stream = true
+	}
+
 	// 8. 选择上游协议并执行
 	c.Set("key_id", apiKey.ID)
 	c.Set("key_name", apiKey.Name)
@@ -250,7 +255,9 @@ func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
 	return ""
 }
 
-// execute 执行 Unified 请求，返回使用的上游协议名
+// execute 执行 Unified 请求，返回使用的上游协议名。
+//
+// 优先使用 Outbound 接口（AxonHub 风格），回退到 Provider.FromUnified。
 func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 	result *router.RouteResult, usage *registry.Usage) (string, error) {
 
@@ -281,15 +288,21 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 		return upstreamProto, fmt.Errorf("no base URL for protocol %s", upstreamProto)
 	}
 
-	upProv := upDesc.NewProvider(&registry.Config{
-		BaseURL: baseURL,
-		APIKey:  result.Provider.APIKey,
-	})
+	cfg := &registry.Config{BaseURL: baseURL, APIKey: result.Provider.APIKey}
+	upProv := upDesc.NewProvider(cfg)
 
-	// 上游执行：Unified → 上游格式 → 发请求 → Unified 响应/流
-	resp, events, err := upProv.FromUnified(req)
+	// 上游执行：优先使用 Outbound 接口
+	var resp *unified.Response
+	var events <-chan unified.StreamEvent
+	var err error
+
+	if outbound, ok := upProv.(registry.Outbound); ok {
+		resp, events, err = outbound.BuildRequest(req)
+	} else {
+		resp, events, err = upProv.FromUnified(req)
+	}
+
 	if err != nil {
-		// 上游错误直接透传给客户端
 		if httpErr, ok := err.(*registry.HTTPError); ok {
 			c.Status(httpErr.StatusCode)
 			c.Header("Content-Type", "application/json")
@@ -301,6 +314,11 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 	// 用入口协议把 Unified 响应/流格式化为客户端格式
 	entryDesc, _ := registry.Get(req.SourceProtocol)
 	entryProv := entryDesc.NewProvider(&registry.Config{})
+
+	// 优先使用 Inbound 接口
+	if inbound, ok := entryProv.(registry.Inbound); ok {
+		return upstreamProto, inbound.FormatResponse(resp, events, c, usage)
+	}
 	return upstreamProto, entryProv.FormatUnified(resp, events, c, usage)
 }
 

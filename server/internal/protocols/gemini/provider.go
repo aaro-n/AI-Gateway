@@ -12,7 +12,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ai-gateway/internal/core/reasonmap"
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/schemaclean"
 	"ai-gateway/internal/core/unified"
 )
 
@@ -143,9 +145,10 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			role = "assistant"
 		}
 
-		// 合并 parts 为 content blocks
+		// 合并 parts 为 content blocks — 支持 text / inlineData / functionCall / functionResponse
 		var blocks []unified.ContentBlock
 		var hasImage bool
+		var toolCalls []unified.ToolCall
 		for _, partRaw := range c.Parts {
 			var part map[string]interface{}
 			if json.Unmarshal(partRaw, &part) != nil {
@@ -169,6 +172,29 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 						},
 					})
 				}
+			} else if fc, ok := part["functionCall"].(map[string]interface{}); ok {
+				// Gemini functionCall → OpenAI tool_calls
+				name, _ := fc["name"].(string)
+				if args, ok := fc["args"]; ok {
+					argsJSON, _ := json.Marshal(args)
+					toolCalls = append(toolCalls, unified.ToolCall{
+						ID:   fmt.Sprintf("call_%s", name),
+						Type: "function",
+						Function: unified.FunctionCall{
+							Name:      name,
+							Arguments: string(argsJSON),
+						},
+					})
+				}
+			} else if fr, ok := part["functionResponse"].(map[string]interface{}); ok {
+				// Gemini functionResponse → OpenAI tool role message
+				name, _ := fr["name"].(string)
+				respData, _ := json.Marshal(fr["response"])
+				msgs = append(msgs, unified.Message{
+					Role:       "tool",
+					ToolCallID: fmt.Sprintf("call_%s", name),
+					Content:    respData,
+				})
 			}
 		}
 
@@ -185,10 +211,14 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			rawMsg = unified.StringContent(strings.Join(textParts, "\n"))
 		}
 
-		msgs = append(msgs, unified.Message{
+		um := unified.Message{
 			Role:    role,
 			Content: rawMsg,
-		})
+		}
+		if len(toolCalls) > 0 {
+			um.ToolCalls = toolCalls
+		}
+		msgs = append(msgs, um)
 	}
 
 	req := &unified.Request{
@@ -198,7 +228,7 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 		Temperature:    raw.GenerationConfig.Temperature,
 		TopP:           raw.GenerationConfig.TopP,
 		Stop:           raw.GenerationConfig.StopSequences,
-		Stream:         false, // Gemini 通过 URL 区分流式，ToUnified 无法感知，默认 false
+		Stream:         false, // Gemini 通过 URL 区分流式；调用方应从 URL streamGenerateContent 检测并补设
 		SourceProtocol: "gemini",
 	}
 	if raw.GenerationConfig.MaxOutputTokens != nil {
@@ -303,6 +333,35 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 			geminiRole = "model"
 		}
 		parts := p.unifiedContentToGeminiParts(m)
+		// assistant tool_calls → functionCall parts
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				var args interface{}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					args = tc.Function.Arguments
+				}
+				parts = append(parts, map[string]interface{}{
+					"functionCall": map[string]interface{}{
+						"name": tc.Function.Name,
+						"args": args,
+					},
+				})
+			}
+		}
+		// tool role → functionResponse part
+		if m.Role == "tool" {
+			var resp interface{}
+			if err := json.Unmarshal(m.Content, &resp); err != nil {
+				resp = unified.ContentString(m.Content)
+			}
+			parts = append(parts, map[string]interface{}{
+				"functionResponse": map[string]interface{}{
+					"name":     m.Name,
+					"response": resp,
+				},
+			})
+			geminiRole = "user"
+		}
 		contents = append(contents, map[string]interface{}{
 			"role":  geminiRole,
 			"parts": parts,
@@ -339,11 +398,20 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 			functionDeclarations := make([]map[string]interface{}, 0, len(unifiedTools))
 			for _, t := range unifiedTools {
 				if t.Function.Name != "" {
-					functionDeclarations = append(functionDeclarations, map[string]interface{}{
+					// 清理 JSON Schema 以兼容 Gemini（移除 $ref / oneOf / const 等）
+					cleanParams := json.RawMessage(schemaclean.ForGemini(t.Function.Parameters))
+
+					fd := map[string]interface{}{
 						"name":        t.Function.Name,
 						"description": t.Function.Description,
-						"parameters":  t.Function.Parameters,
-					})
+					}
+					if len(cleanParams) > 0 && string(cleanParams) != "null" {
+						var paramsObj interface{}
+						if json.Unmarshal(cleanParams, &paramsObj) == nil {
+							fd["parameters"] = paramsObj
+						}
+					}
+					functionDeclarations = append(functionDeclarations, fd)
 				}
 			}
 			if len(functionDeclarations) > 0 {
@@ -433,10 +501,8 @@ func (p *GeminiProvider) parseGeminiResponse(body []byte) (*unified.Response, er
 	var raw struct {
 		Candidates []struct {
 			Content struct {
-				Role  string `json:"role"`
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
+				Role  string            `json:"role"`
+				Parts []json.RawMessage `json:"parts"`
 			} `json:"content"`
 			FinishReason string `json:"finishReason"`
 		} `json:"candidates"`
@@ -458,20 +524,46 @@ func (p *GeminiProvider) parseGeminiResponse(body []byte) (*unified.Response, er
 	}
 
 	if len(raw.Candidates) > 0 {
-		var text string
-		for _, part := range raw.Candidates[0].Content.Parts {
-			text += part.Text
+		var textContent string
+		var reasoningContent string
+		var toolCalls []unified.ToolCall
+		var reasoningSig *string
+		for _, partRaw := range raw.Candidates[0].Content.Parts {
+			var part map[string]interface{}
+			if json.Unmarshal(partRaw, &part) != nil {
+				continue
+			}
+			// text
+			if text, ok := part["text"].(string); ok {
+				textContent += text
+			}
+			// thought (Gemini think part)
+			if thought, ok := part["thought"].(string); ok && thought != "" {
+				reasoningContent += thought
+			}
+			// thoughtSignature (Gemini 推理签名)
+			if sig, ok := part["thoughtSignature"].(string); ok && sig != "" {
+				reasoningSig = &sig
+			}
+			// functionCall → tool_calls
+			if fc, ok := part["functionCall"].(map[string]interface{}); ok {
+				name, _ := fc["name"].(string)
+				argsJSON, _ := json.Marshal(fc["args"])
+				toolCalls = append(toolCalls, unified.ToolCall{
+					ID:   fmt.Sprintf("call_%s", name),
+					Type: "function",
+					Function: unified.FunctionCall{
+						Name:      name,
+						Arguments: string(argsJSON),
+					},
+				})
+			}
 		}
-		uresp.Content = text
-
-		switch raw.Candidates[0].FinishReason {
-		case "MAX_TOKENS":
-			uresp.FinishReason = "length"
-		case "STOP":
-			uresp.FinishReason = "stop"
-		default:
-			uresp.FinishReason = "stop"
-		}
+		uresp.Content = textContent
+		uresp.ReasoningContent = reasoningContent
+		uresp.ReasoningSignature = reasoningSig
+		uresp.ToolCalls = toolCalls
+		uresp.FinishReason = reasonmap.GeminiToUnified(raw.Candidates[0].FinishReason)
 	}
 	return uresp, nil
 }
@@ -503,9 +595,7 @@ func (p *GeminiProvider) streamGeminiToUnified(body io.ReadCloser) <-chan unifie
 			var chunk struct {
 				Candidates []struct {
 					Content struct {
-						Parts []struct {
-							Text string `json:"text"`
-						} `json:"parts"`
+						Parts []json.RawMessage `json:"parts"`
 					} `json:"content"`
 					FinishReason string `json:"finishReason"`
 				} `json:"candidates"`
@@ -529,22 +619,71 @@ func (p *GeminiProvider) streamGeminiToUnified(body io.ReadCloser) <-chan unifie
 			}
 
 			if len(chunk.Candidates) > 0 {
-				for _, part := range chunk.Candidates[0].Content.Parts {
-					if part.Text != "" {
+				var hasText bool
+				var trailingSig string
+				for _, partRaw := range chunk.Candidates[0].Content.Parts {
+					var part map[string]interface{}
+					if json.Unmarshal(partRaw, &part) != nil {
+						continue
+					}
+					// text / thought / thoughtSignature
+					if text, ok := part["text"].(string); ok {
+						if text != "" {
+							ch <- unified.StreamEvent{
+								Type:  unified.EventChunk,
+								Delta: &unified.Delta{Content: text},
+							}
+							hasText = true
+						}
+					}
+					if thought, ok := part["thought"].(string); ok && thought != "" {
 						ch <- unified.StreamEvent{
 							Type:  unified.EventChunk,
-							Delta: &unified.Delta{Content: part.Text},
+							Delta: &unified.Delta{ReasoningContent: thought},
+						}
+					}
+					// thoughtSignature 单独出现（不含 text 的 part）
+					if sig, ok := part["thoughtSignature"].(string); ok && sig != "" {
+						if hasText {
+							// text part 携带签名 → trailing signature（Sub2api 模式）
+							trailingSig = sig
+						} else {
+							ch <- unified.StreamEvent{
+								Type:  unified.EventChunk,
+								Delta: &unified.Delta{ReasoningSignature: &sig},
+							}
+						}
+					}
+					// functionCall
+					if fc, ok := part["functionCall"].(map[string]interface{}); ok {
+						name, _ := fc["name"].(string)
+						argsJSON, _ := json.Marshal(fc["args"])
+						ch <- unified.StreamEvent{
+							Type: unified.EventChunk,
+							Delta: &unified.Delta{
+								ToolCalls: []unified.ToolCall{{
+									ID:   fmt.Sprintf("call_%s", name),
+									Type: "function",
+									Function: unified.FunctionCall{
+										Name:      name,
+										Arguments: string(argsJSON),
+									},
+								}},
+							},
 						}
 					}
 				}
-				if chunk.Candidates[0].FinishReason != "" {
-					finishReason := "stop"
-					if chunk.Candidates[0].FinishReason == "MAX_TOKENS" {
-						finishReason = "length"
+				// trailing signature: text part 携带签名，text content 已发送后补发签名
+				if trailingSig != "" {
+					ch <- unified.StreamEvent{
+						Type:  unified.EventChunk,
+						Delta: &unified.Delta{ReasoningSignature: &trailingSig},
 					}
+				}
+				if chunk.Candidates[0].FinishReason != "" {
 					ch <- unified.StreamEvent{
 						Type:         unified.EventDone,
-						FinishReason: finishReason,
+						FinishReason: reasonmap.GeminiToUnified(chunk.Candidates[0].FinishReason),
 					}
 				}
 			}
@@ -567,11 +706,21 @@ func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan uni
 		if resp.Content != "" {
 			parts = append(parts, map[string]interface{}{"text": resp.Content})
 		}
-
-		finishReason := "STOP"
-		if resp.FinishReason == "length" {
-			finishReason = "MAX_TOKENS"
+		// tool_calls → functionCall parts
+		for _, tc := range resp.ToolCalls {
+			var args interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				args = tc.Function.Arguments
+			}
+			parts = append(parts, map[string]interface{}{
+				"functionCall": map[string]interface{}{
+					"name": tc.Function.Name,
+					"args": args,
+				},
+			})
 		}
+
+		finishReason := reasonmap.UnifiedToGemini(resp.FinishReason)
 
 		geminiResp := map[string]interface{}{
 			"candidates": []map[string]interface{}{
@@ -627,10 +776,7 @@ func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan uni
 				outputTokens = ev.Usage.OutputTokens
 			}
 		case unified.EventDone:
-			finishReason := "STOP"
-			if ev.FinishReason == "length" {
-				finishReason = "MAX_TOKENS"
-			}
+			finishReason := reasonmap.UnifiedToGemini(ev.FinishReason)
 			chunk := map[string]interface{}{
 				"candidates": []map[string]interface{}{
 					{

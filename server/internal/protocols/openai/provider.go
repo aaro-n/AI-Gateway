@@ -197,6 +197,8 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 		MaxCompletionTokens *int              `json:"max_completion_tokens,omitempty"`
 		Temperature         *float64          `json:"temperature,omitempty"`
 		TopP                *float64          `json:"top_p,omitempty"`
+		TopK                *int              `json:"top_k,omitempty"`
+		Seed                *int              `json:"seed,omitempty"`
 		FrequencyPenalty    *float64          `json:"frequency_penalty,omitempty"`
 		PresencePenalty     *float64          `json:"presence_penalty,omitempty"`
 		Stream              bool              `json:"stream,omitempty"`
@@ -205,6 +207,7 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 		ResponseFormat      json.RawMessage   `json:"response_format,omitempty"`
 		Stop                []string          `json:"stop,omitempty"`
 		ReasoningEffort     string            `json:"reasoning_effort,omitempty"`
+		Modalities          []string          `json:"modalities,omitempty"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("parse openai body: %w", err)
@@ -248,6 +251,8 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 		MaxTokens:        maxTokens,
 		Temperature:      raw.Temperature,
 		TopP:             raw.TopP,
+		TopK:             raw.TopK,
+		Seed:             raw.Seed,
 		FrequencyPenalty: raw.FrequencyPenalty,
 		PresencePenalty:  raw.PresencePenalty,
 		Stream:           raw.Stream,
@@ -255,6 +260,7 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 		ResponseFormat:   raw.ResponseFormat,
 		Stop:             raw.Stop,
 		ReasoningEffort:  raw.ReasoningEffort,
+		Modalities:       raw.Modalities,
 		SourceProtocol:   "openai",
 	}
 	if len(systemParts) > 0 {
@@ -355,11 +361,23 @@ func (p *OpenAIProvider) unifiedToOpenAI(req *unified.Request) map[string]interf
 	if req.TopP != nil {
 		result["top_p"] = *req.TopP
 	}
+	if req.TopK != nil {
+		result["top_k"] = *req.TopK
+	}
+	if req.Seed != nil {
+		result["seed"] = *req.Seed
+	}
 	if req.FrequencyPenalty != nil {
 		result["frequency_penalty"] = *req.FrequencyPenalty
 	}
 	if req.PresencePenalty != nil {
 		result["presence_penalty"] = *req.PresencePenalty
+	}
+	if req.ReasoningBudget != nil {
+		result["reasoning_budget"] = *req.ReasoningBudget
+	}
+	if len(req.Modalities) > 0 {
+		result["modalities"] = req.Modalities
 	}
 	if len(req.Tools) > 0 {
 		result["tools"] = unified.RawJSON(req.Tools)

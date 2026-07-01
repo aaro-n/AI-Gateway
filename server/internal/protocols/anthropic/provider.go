@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ai-gateway/internal/core/reasonmap"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
 )
@@ -200,24 +201,38 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 		Stream      bool              `json:"stream,omitempty"`
 		Temperature *float64          `json:"temperature,omitempty"`
 		TopP        *float64          `json:"top_p,omitempty"`
+		TopK        *int              `json:"top_k,omitempty"`
 		Stop        []string          `json:"stop_sequences,omitempty"`
+		Thinking    *struct {
+			Type         string `json:"type"`
+			BudgetTokens *int   `json:"budget_tokens,omitempty"`
+		} `json:"thinking,omitempty"`
+		ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("parse anthropic body: %w", err)
 	}
 
-	// 解析 system（可能是 string 或 content blocks）
+	// 解析 system（可能是 string 或 content blocks）— 同时提取 cache_control
 	systemPrompt := ""
+	var systemCacheControl map[string]any
 	if len(raw.System) > 0 {
 		var s string
 		if json.Unmarshal(raw.System, &s) == nil {
 			systemPrompt = s
 		} else {
-			var blocks []unified.ContentBlock
+			var blocks []struct {
+				Type         string         `json:"type"`
+				Text         string         `json:"text"`
+				CacheControl map[string]any `json:"cache_control,omitempty"`
+			}
 			if json.Unmarshal(raw.System, &blocks) == nil {
 				for _, b := range blocks {
 					if b.Type == "text" {
 						systemPrompt += b.Text
+						if b.CacheControl != nil {
+							systemCacheControl = b.CacheControl
+						}
 					}
 				}
 			}
@@ -251,14 +266,15 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 			Data      string `json:"data"`
 		}
 		type anthropicBlock struct {
-			Type      string           `json:"type"`
-			Text      string           `json:"text,omitempty"`
-			ID        string           `json:"id,omitempty"`
-			Name      string           `json:"name,omitempty"`
-			Input     json.RawMessage  `json:"input,omitempty"`
-			ToolUseID string           `json:"tool_use_id,omitempty"`
-			Content   json.RawMessage  `json:"content,omitempty"`
-			Source    *anthropicSource `json:"source,omitempty"`
+			Type         string           `json:"type"`
+			Text         string           `json:"text,omitempty"`
+			ID           string           `json:"id,omitempty"`
+			Name         string           `json:"name,omitempty"`
+			Input        json.RawMessage  `json:"input,omitempty"`
+			ToolUseID    string           `json:"tool_use_id,omitempty"`
+			Content      json.RawMessage  `json:"content,omitempty"`
+			Source       *anthropicSource `json:"source,omitempty"`
+			CacheControl map[string]any   `json:"cache_control,omitempty"`
 		}
 
 		var blocks []anthropicBlock
@@ -268,7 +284,7 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 			continue
 		}
 
-		// 分离 tool_use / tool_result / text / image
+		// 分离 tool_use / tool_result / text / image — 保留 cache_control
 		textParts := make([]string, 0)
 		var toolCalls []unified.ToolCall
 		var toolResults []unified.Message
@@ -276,21 +292,22 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 		var hasImage bool
 
 		for _, b := range blocks {
+			cc := b.CacheControl
 			switch b.Type {
 			case "text":
 				textParts = append(textParts, b.Text)
-				unifiedBlocks = append(unifiedBlocks, unified.ContentBlock{
-					Type: "text",
-					Text: b.Text,
-				})
+				cb := unified.ContentBlock{Type: "text", Text: b.Text}
+				if cc != nil {
+					cb.TransformerMetadata = map[string]any{"cache_control": cc}
+				}
+				unifiedBlocks = append(unifiedBlocks, cb)
 			case "image":
 				if b.Source != nil && b.Source.Type == "base64" {
 					hasImage = true
-					dataURL := fmt.Sprintf("data:%s;base64,%s", b.Source.MediaType, b.Source.Data)
 					unifiedBlocks = append(unifiedBlocks, unified.ContentBlock{
 						Type: "image_url",
 						ImageURL: &unified.ImageURL{
-							URL: dataURL,
+							URL: fmt.Sprintf("data:%s;base64,%s", b.Source.MediaType, b.Source.Data),
 						},
 					})
 				}
@@ -305,11 +322,15 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 					},
 				})
 			case "tool_result":
-				// tool_result 转为独立的 tool role 消息
+				trMeta := map[string]any{}
+				if cc != nil {
+					trMeta["cache_control"] = cc
+				}
 				toolResults = append(toolResults, unified.Message{
-					Role:       "tool",
-					ToolCallID: b.ToolUseID,
-					Content:    b.Content,
+					Role:                "tool",
+					ToolCallID:          b.ToolUseID,
+					Content:             b.Content,
+					TransformerMetadata: trMeta,
 				})
 			}
 		}
@@ -334,12 +355,35 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 		MaxTokens:      raw.MaxTokens,
 		Temperature:    raw.Temperature,
 		TopP:           raw.TopP,
+		TopK:           raw.TopK,
 		Stream:         raw.Stream,
 		Stop:           raw.Stop,
 		SourceProtocol: "anthropic",
 	}
 	if len(raw.Tools) > 0 {
 		req.Tools = raw.Tools
+	}
+	// 透传 thinking 配置（Claude extended thinking）
+	if raw.Thinking != nil {
+		req.ReasoningEffort = raw.Thinking.Type
+		req.ReasoningBudget = raw.Thinking.BudgetTokens
+		req.TransformerMetadata = map[string]any{
+			"thinking_type": raw.Thinking.Type,
+		}
+		if raw.Thinking.BudgetTokens != nil {
+			req.TransformerMetadata["thinking_budget_tokens"] = *raw.Thinking.BudgetTokens
+		}
+	}
+	// 透传 tool_choice（Anthropic 原生格式, e.g. {"type":"auto"} / {"type":"any"} / {"type":"tool","name":"xxx"}）
+	if len(raw.ToolChoice) > 0 {
+		req.ToolChoice = raw.ToolChoice
+	}
+	// 透传 system cache_control
+	if systemCacheControl != nil {
+		if req.TransformerMetadata == nil {
+			req.TransformerMetadata = map[string]any{}
+		}
+		req.TransformerMetadata["system_cache_control"] = systemCacheControl
 	}
 	return req, nil
 }
@@ -393,6 +437,10 @@ func (p *AnthropicProvider) FromUnified(req *unified.Request) (*unified.Response
 func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]interface{} {
 	anthropicMsgs := make([]map[string]interface{}, 0, len(req.Messages))
 
+	// 从 TransformerMetadata 恢复 cache_control 和 thinking
+	meta := req.TransformerMetadata
+	hasSystemCacheControl := meta != nil && meta["system_cache_control"] != nil
+
 	for _, m := range req.Messages {
 		if m.Role == "system" {
 			continue // system 走顶层字段
@@ -400,21 +448,37 @@ func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]
 
 		if m.Role == "tool" {
 			// OpenAI tool role → Anthropic user message with tool_result block
+			trBlock := map[string]interface{}{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     unified.ContentString(m.Content),
+			}
+			// 恢复 cache_control（从 TransformerMetadata）
+			if m.TransformerMetadata != nil {
+				if cc, ok := m.TransformerMetadata["cache_control"]; ok {
+					trBlock["cache_control"] = cc
+				}
+			}
 			anthropicMsgs = append(anthropicMsgs, map[string]interface{}{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type":        "tool_result",
-						"tool_use_id": m.ToolCallID,
-						"content":     unified.ContentString(m.Content),
-					},
-				},
+				"role":    "user",
+				"content": []map[string]interface{}{trBlock},
 			})
 			continue
 		}
 
-		// user / assistant
+		// user / assistant — 保留 cache_control
 		blocks := p.unifiedContentToAnthropicBlocks(m)
+		// 从消息的 TransformerMetadata 恢复 cache_control，附加到第一个 text block
+		if m.TransformerMetadata != nil {
+			if cc, ok := m.TransformerMetadata["cache_control"]; ok {
+				for i := range blocks {
+					if blocks[i]["type"] == "text" {
+						blocks[i]["cache_control"] = cc
+						break
+					}
+				}
+			}
+		}
 		msg := map[string]interface{}{
 			"role":    m.Role,
 			"content": blocks,
@@ -456,8 +520,52 @@ func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]
 	if req.TopP != nil {
 		result["top_p"] = *req.TopP
 	}
+	if req.TopK != nil {
+		result["top_k"] = *req.TopK
+	}
 	if len(req.Stop) > 0 {
 		result["stop_sequences"] = req.Stop
+	}
+	// 还原 thinking 配置
+	thinkingType := ""
+	if meta != nil {
+		if t, ok := meta["thinking_type"].(string); ok {
+			thinkingType = t
+		}
+	}
+	if req.ReasoningEffort != "" && thinkingType == "" {
+		thinkingType = req.ReasoningEffort
+	}
+	if thinkingType != "" && thinkingType != "none" {
+		thinking := map[string]interface{}{"type": thinkingType}
+		if req.ReasoningBudget != nil && *req.ReasoningBudget > 0 {
+			thinking["budget_tokens"] = *req.ReasoningBudget
+		} else if meta != nil {
+			if bt, ok := meta["thinking_budget_tokens"].(float64); ok {
+				thinking["budget_tokens"] = int(bt)
+			} else if bt, ok := meta["thinking_budget_tokens"].(int); ok {
+				thinking["budget_tokens"] = bt
+			}
+		}
+		result["thinking"] = thinking
+	}
+	// 还原 tool_choice（优先 Anthropic 原生格式，兼容 simple string）
+	if len(req.ToolChoice) > 0 {
+		var raw interface{}
+		if err := json.Unmarshal(req.ToolChoice, &raw); err == nil {
+			result["tool_choice"] = raw
+		}
+	}
+	// 还原 system prompt 的 cache_control（使用 Anthropic content block 数组格式）
+	if req.SystemPrompt != "" {
+		if hasSystemCacheControl {
+			cc := meta["system_cache_control"]
+			result["system"] = []map[string]interface{}{
+				{"type": "text", "text": req.SystemPrompt, "cache_control": cc},
+			}
+		} else {
+			result["system"] = req.SystemPrompt
+		}
 	}
 	if len(req.Tools) > 0 {
 		var unifiedTools []unified.Tool
@@ -606,14 +714,9 @@ func (p *AnthropicProvider) parseAnthropicResponse(body []byte) (*unified.Respon
 	uresp.Content = textContent
 	uresp.ReasoningContent = reasoningContent
 	uresp.ToolCalls = toolCalls
-
-	switch raw.StopReason {
-	case "max_tokens":
-		uresp.FinishReason = "length"
-	case "tool_use":
-		uresp.FinishReason = "tool_calls"
-	default:
-		uresp.FinishReason = "stop"
+	uresp.FinishReason = reasonmap.AnthropicToUnified(raw.StopReason)
+	if raw.StopReason == "stop_sequence" {
+		uresp.TransformerMetadata = map[string]any{"stop_sequence": raw.StopReason}
 	}
 	return uresp, nil
 }
@@ -629,6 +732,15 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 		defer close(ch)
 		reader := bufio.NewReader(body)
 		var inputTokens int
+		var messageID string
+		var messageModel string
+		// 跟踪 content_block_start 以关联 input_json_delta 到正确的 tool
+		type blockInfo struct {
+			blockType string // "text", "thinking", "tool_use"
+			toolName  string
+			toolID    string
+		}
+		blocks := make(map[int]*blockInfo) // index → block info
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
@@ -643,10 +755,12 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			var event struct {
-				Type    string          `json:"type"`
-				Message json.RawMessage `json:"message"`
-				Delta   json.RawMessage `json:"delta"`
-				Usage   json.RawMessage `json:"usage"`
+				Type         string          `json:"type"`
+				Index        *int            `json:"index"`
+				Message      json.RawMessage `json:"message"`
+				Delta        json.RawMessage `json:"delta"`
+				Usage        json.RawMessage `json:"usage"`
+				ContentBlock json.RawMessage `json:"content_block"`
 			}
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				continue
@@ -656,45 +770,99 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 			case "message_start":
 				if len(event.Message) > 0 {
 					var msg struct {
+						ID    string `json:"id"`
+						Model string `json:"model"`
 						Usage struct {
 							InputTokens int `json:"input_tokens"`
 						} `json:"usage"`
 					}
 					if json.Unmarshal(event.Message, &msg) == nil {
+						messageID = msg.ID
+						messageModel = msg.Model
 						inputTokens = msg.Usage.InputTokens
 					}
 				}
+			case "content_block_start":
+				if event.Index != nil && len(event.ContentBlock) > 0 {
+					var cb struct {
+						Type string `json:"type"`
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					}
+					if json.Unmarshal(event.ContentBlock, &cb) == nil {
+						blocks[*event.Index] = &blockInfo{
+							blockType: cb.Type,
+							toolName:  cb.Name,
+							toolID:    cb.ID,
+						}
+					}
+				}
 			case "content_block_delta":
+				idx := -1
+				if event.Index != nil {
+					idx = *event.Index
+				}
 				if len(event.Delta) > 0 {
 					var delta struct {
 						Type        string `json:"type"`
 						Text        string `json:"text"`
 						Thinking    string `json:"thinking"`
+						Signature   string `json:"signature"`
 						PartialJSON string `json:"partial_json"`
 					}
 					if json.Unmarshal(event.Delta, &delta) == nil {
 						switch delta.Type {
 						case "text_delta":
 							ch <- unified.StreamEvent{
-								Type: unified.EventChunk,
+								Type:      unified.EventChunk,
+								MessageID: messageID,
+								Model:     messageModel,
 								Delta: &unified.Delta{
 									Content: delta.Text,
 								},
 							}
 						case "thinking_delta":
 							ch <- unified.StreamEvent{
-								Type: unified.EventChunk,
+								Type:      unified.EventChunk,
+								MessageID: messageID,
+								Model:     messageModel,
 								Delta: &unified.Delta{
 									ReasoningContent: delta.Thinking,
 								},
 							}
-						case "input_json_delta":
+						case "signature_delta":
 							ch <- unified.StreamEvent{
-								Type: unified.EventChunk,
+								Type:      unified.EventChunk,
+								MessageID: messageID,
+								Model:     messageModel,
+								Delta: &unified.Delta{
+									ReasoningSignature: &delta.Signature,
+								},
+							}
+						case "input_json_delta":
+							// 从 content_block_start 获取 tool name/ID
+							toolCallID := ""
+							if bi, ok := blocks[idx]; ok && bi.blockType == "tool_use" {
+								toolCallID = bi.toolID
+							}
+							evt := unified.StreamEvent{
+								Type:      unified.EventChunk,
+								MessageID: messageID,
+								Model:     messageModel,
 								Delta: &unified.Delta{
 									InputJSON: delta.PartialJSON,
 								},
 							}
+							if toolCallID != "" {
+								evt.Delta.TransformerMetadata = map[string]any{
+									"tool_call_id": toolCallID,
+								}
+								// 也将 tool name 传到第一个 tool_call slot
+								if bi, ok := blocks[idx]; ok && bi.toolName != "" {
+									evt.Delta.TransformerMetadata["tool_name"] = bi.toolName
+								}
+							}
+							ch <- evt
 						}
 					}
 				}
@@ -705,7 +873,9 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 					}
 					if json.Unmarshal(event.Usage, &u) == nil {
 						ch <- unified.StreamEvent{
-							Type: unified.EventUsage,
+							Type:      unified.EventUsage,
+							MessageID: messageID,
+							Model:     messageModel,
 							Usage: &unified.Usage{
 								InputTokens:  inputTokens,
 								OutputTokens: u.OutputTokens,
@@ -713,10 +883,27 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 						}
 					}
 				}
+				// message_delta 也包含 stop_reason
+				if len(event.Delta) > 0 {
+					var md struct {
+						StopReason string `json:"stop_reason"`
+					}
+					if json.Unmarshal(event.Delta, &md) == nil {
+						ch <- unified.StreamEvent{
+							Type:         unified.EventDone,
+							MessageID:    messageID,
+							Model:        messageModel,
+							FinishReason: reasonmap.AnthropicToUnified(md.StopReason),
+						}
+						return
+					}
+				}
 			case "message_stop":
 				ch <- unified.StreamEvent{
 					Type:         unified.EventDone,
-					FinishReason: "stop",
+					MessageID:    messageID,
+					Model:        messageModel,
+					FinishReason: unified.FinishReasonStop,
 				}
 				return
 			}
@@ -736,6 +923,13 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 		usage.OutputTokens = resp.Usage.OutputTokens
 
 		contentBlocks := make([]map[string]interface{}, 0)
+		// thinking 块 — 从 ReasoningContent
+		if resp.ReasoningContent != "" {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type":     "thinking",
+				"thinking": resp.ReasoningContent,
+			})
+		}
 		if resp.Content != "" {
 			contentBlocks = append(contentBlocks, map[string]interface{}{
 				"type": "text",
@@ -755,12 +949,12 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 			})
 		}
 
-		stopReason := "end_turn"
-		switch resp.FinishReason {
-		case "length":
-			stopReason = "max_tokens"
-		case "tool_calls":
-			stopReason = "tool_use"
+		stopReason := reasonmap.UnifiedToAnthropic(resp.FinishReason)
+		// 恢复 stop_sequence 原值（如果有）
+		if resp.TransformerMetadata != nil {
+			if ss, ok := resp.TransformerMetadata["stop_sequence"].(string); ok && ss == "stop_sequence" {
+				stopReason = "stop_sequence"
+			}
 		}
 
 		anthropicResp := map[string]interface{}{
@@ -789,11 +983,42 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 	c.Header("Connection", "keep-alive")
 
 	var inputTokens, outputTokens int
+	var messageStarted bool
+	var messageID string
+	var messageModel string
 	var blockIndex int
 	var blockActive bool
-	var currentBlockType string // "text" or "thinking"
+	var currentBlockType string // "text" or "thinking" or "tool_use"
+
+	// 并行 tool_use index 跟踪 (参考 New-API ToolCallBaseIndex)
+	toolUseCount := 0
+
+	emitMessageStart := func() {
+		if messageStarted {
+			return
+		}
+		if messageID == "" {
+			messageID = "msg_unified"
+		}
+		if messageModel == "" {
+			messageModel = "unknown"
+		}
+		p.writeSSE(c, map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"id":    messageID,
+				"type":  "message",
+				"role":  "assistant",
+				"model": messageModel,
+			},
+		})
+		messageStarted = true
+	}
 
 	ensureBlockStart := func(blockType string) {
+		if !messageStarted {
+			emitMessageStart()
+		}
 		if blockActive && currentBlockType == blockType {
 			return
 		}
@@ -803,22 +1028,65 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 				"type":  "content_block_stop",
 				"index": blockIndex,
 			})
+			if currentBlockType == "tool_use" {
+				toolUseCount++
+			}
 			blockIndex++
+		}
+		// content_block_start — 包含 block 类型及其特定字段
+		cb := map[string]interface{}{"type": blockType}
+		if blockType == "tool_use" {
+			cb["name"] = ""
+			cb["id"] = ""
+		} else {
+			cb[blockType] = ""
 		}
 		p.writeSSE(c, map[string]interface{}{
 			"type":          "content_block_start",
 			"index":         blockIndex,
-			"content_block": map[string]interface{}{"type": blockType, blockType: ""},
+			"content_block": cb,
 		})
 		blockActive = true
 		currentBlockType = blockType
 	}
 
 	for ev := range events {
+		// 从事件中提取 message 元信息
+		if ev.MessageID != "" && messageID == "" {
+			messageID = ev.MessageID
+		}
+		if ev.Model != "" && messageModel == "" {
+			messageModel = ev.Model
+		}
 		switch ev.Type {
 		case unified.EventChunk:
 			if ev.Delta == nil {
 				continue
+			}
+			// signature_delta — 直接 emit，不分 block（signature 总是跟随在 thinking_delta 之后）
+			if ev.Delta.ReasoningSignature != nil {
+				p.writeSSE(c, map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": blockIndex,
+					"delta": map[string]interface{}{
+						"type":      "signature_delta",
+						"signature": *ev.Delta.ReasoningSignature,
+					},
+				})
+				continue
+			}
+			// input_json_delta → tool_use block
+			if ev.Delta.InputJSON != "" {
+				ensureBlockStart("tool_use")
+				delta := map[string]interface{}{
+					"type":         "input_json_delta",
+					"partial_json": ev.Delta.InputJSON,
+				}
+				p.writeSSE(c, map[string]interface{}{
+					"type":  "content_block_delta",
+					"index": blockIndex,
+					"delta": delta,
+				})
 			}
 			if ev.Delta.ReasoningContent != "" {
 				ensureBlockStart("thinking")
@@ -848,6 +1116,10 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 				outputTokens = ev.Usage.OutputTokens
 			}
 		case unified.EventDone:
+			// 确保 message_start（如果还没有任何 content block）
+			if !messageStarted {
+				emitMessageStart()
+			}
 			// 关闭当前 block
 			if blockActive {
 				p.writeSSE(c, map[string]interface{}{
@@ -858,23 +1130,19 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 				blockActive = false
 			}
 			// message_delta with stop_reason + usage
-			stopReason := "end_turn"
-			switch ev.FinishReason {
-			case "length":
-				stopReason = "max_tokens"
-			case "tool_calls":
-				stopReason = "tool_use"
-			case "stop_sequence":
-				stopReason = "stop_sequence"
-			}
-			p.writeSSE(c, map[string]interface{}{
+			stopReason := reasonmap.UnifiedToAnthropic(ev.FinishReason)
+			msgDelta := map[string]interface{}{
 				"type":  "message_delta",
 				"delta": map[string]interface{}{"stop_reason": stopReason},
 				"usage": map[string]interface{}{
-					"input_tokens":  inputTokens,
 					"output_tokens": outputTokens,
 				},
-			})
+			}
+			// message_delta 需要 input_tokens（来自 message_start），合并 usage
+			if inputTokens > 0 {
+				msgDelta["usage"].(map[string]interface{})["input_tokens"] = inputTokens
+			}
+			p.writeSSE(c, msgDelta)
 			// message_stop
 			p.writeSSE(c, map[string]interface{}{"type": "message_stop"})
 		}
