@@ -214,9 +214,9 @@ func (h *UnifiedGatewayHandler) route(apiKey model.Key, modelName string) (*rout
 // checkKeyConflict 检查该 key 的直通白名单与映射白名单是否有 model_id 重复。
 // 返回非空字符串表示有冲突（含冲突的 model_id 列表）。
 func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
-	// 直通白名单中的 model_id 集合
+	// 直通白名单中的 model_id 集合（仅 enabled）
 	var directPMIDs []uint
-	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &directPMIDs)
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ? AND enabled = ?", keyID, true).Pluck("provider_model_id", &directPMIDs)
 	if len(directPMIDs) == 0 {
 		return ""
 	}
@@ -226,9 +226,9 @@ func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
 		return ""
 	}
 
-	// 映射白名单中的虚拟模型名集合
+	// 映射白名单中的虚拟模型名集合（仅 enabled）
 	var mappingModelIDs []uint
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Pluck("model_id", &mappingModelIDs)
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND enabled = ?", keyID, true).Pluck("model_id", &mappingModelIDs)
 	if len(mappingModelIDs) == 0 {
 		return ""
 	}
@@ -361,10 +361,11 @@ func (h *UnifiedGatewayHandler) getBaseURL(p *model.Provider, protocol string) s
 	return ""
 }
 
-// verifyKeyID 校验 key 是否有权访问指定虚拟模型（key_models 为空表示全部允许）
+// verifyKeyID 校验 key 是否有权访问指定虚拟模型（key_models 为空表示全部允许）。
+// 只检查 enabled=true 的映射关联。
 func (h *UnifiedGatewayHandler) verifyKeyID(keyID uint, modelName string) error {
 	var count int64
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Count(&count)
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND enabled = ?", keyID, true).Count(&count)
 	if count == 0 {
 		return nil
 	}
@@ -373,7 +374,7 @@ func (h *UnifiedGatewayHandler) verifyKeyID(keyID uint, modelName string) error 
 		return fmt.Errorf("model not allowed for this API key")
 	}
 	var modelCount int64
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND model_id = ?", keyID, m.ID).Count(&modelCount)
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ? AND model_id = ? AND enabled = ?", keyID, m.ID, true).Count(&modelCount)
 	if modelCount == 0 {
 		return fmt.Errorf("model not allowed for this API key")
 	}

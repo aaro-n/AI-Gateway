@@ -82,10 +82,10 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 func (r *ModelRouter) RouteDirect(modelID string, keyID uint) (*RouteResult, error) {
 	r.cooldownManager.ClearExpiredCooldowns()
 
-	// 查询该 key 的直通白名单
+	// 查询该 key 的直通白名单（enabled=true）
 	var allowedPMIDs []uint
 	if keyID > 0 {
-		model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &allowedPMIDs)
+		model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ? AND enabled = ?", keyID, true).Pluck("provider_model_id", &allowedPMIDs)
 	}
 
 	query := model.DB.Preload("Provider").

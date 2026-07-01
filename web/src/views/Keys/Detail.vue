@@ -50,12 +50,12 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.status')" width="70" prop="selected" sortable>
+            <el-table-column :label="t('common.status')" width="70" prop="enabled" sortable>
               <template #default="{ row }">
                 <el-tooltip v-if="!key?.enabled" content="密钥已禁用" placement="top">
-                  <el-switch v-model="row.selected" disabled />
+                  <el-switch v-model="row.enabled" disabled />
                 </el-tooltip>
-                <el-switch v-else v-model="row.selected" @change="toggleProviderModel(row)" />
+                <el-switch v-else v-model="row.enabled" @change="toggleProviderModel(row)" />
               </template>
             </el-table-column>
             <el-table-column :label="t('common.action')" width="70">
@@ -101,12 +101,12 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
-            <el-table-column :label="t('common.status')" width="70" prop="selected" sortable>
+            <el-table-column :label="t('common.status')" width="70" prop="enabled" sortable>
               <template #default="{ row }">
                 <el-tooltip v-if="!key?.enabled" :content="t('key.keyDisabled')" placement="top">
-                  <el-switch v-model="row.selected" disabled />
+                  <el-switch v-model="row.enabled" disabled />
                 </el-tooltip>
-                <el-switch v-else v-model="row.selected" @change="toggleModel(row)" />
+                <el-switch v-else v-model="row.enabled" @change="toggleModel(row)" />
               </template>
             </el-table-column>
             <el-table-column :label="t('common.action')" width="70">
@@ -518,15 +518,12 @@ async function fetchPrompts() {
 }
 
 async function toggleModel(row: any) {
-  const previousValue = !row.selected
+  const previousValue = !row.enabled
   try {
-    if (row.selected) {
-      await api.post(`/keys/${keyId}/models/${row.id}`)
-    } else {
-      await api.delete(`/keys/${keyId}/models/${row.id}`)
-    }
+    const res = await api.put(`/keys/${keyId}/models/${row.id}`)
+    row.enabled = res.data.enabled
   } catch (e: any) {
-    row.selected = previousValue
+    row.enabled = previousValue
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
@@ -542,15 +539,12 @@ async function removeModel(row: any) {
 }
 
 async function toggleProviderModel(row: any) {
-  const previousValue = !row.selected
+  const previousValue = !row.enabled
   try {
-    if (row.selected) {
-      await api.post(`/keys/${keyId}/provider-models/${row.id}`)
-    } else {
-      await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
-    }
+    const res = await api.put(`/keys/${keyId}/provider-models/${row.id}`)
+    row.enabled = res.data.enabled
   } catch (e: any) {
-    row.selected = previousValue
+    row.enabled = previousValue
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
@@ -610,13 +604,8 @@ async function togglePrompt(row: any) {
 async function enableAllModels() {
   enablingModels.value = true
   try {
-    // 将表格中未启用的模型全部 POST 启用
-    for (const m of models.value) {
-      if (!m.selected) {
-        await api.post(`/keys/${keyId}/models/${m.id}`)
-        m.selected = true
-      }
-    }
+    await api.put(`/keys/${keyId}/models`)
+    models.value.forEach(m => m.enabled = true)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -629,8 +618,8 @@ async function disableAllModels() {
   disablingModels.value = true
   try {
     await api.delete(`/keys/${keyId}/models`)
+    models.value.forEach(m => m.enabled = false)
     ElMessage.success(t('common.success'))
-    await fetchModels()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -641,13 +630,8 @@ async function disableAllModels() {
 async function enableAllProviderModels() {
   enablingProviderModels.value = true
   try {
-    // 将表格中未启用的直通模型全部 POST 启用
-    for (const m of providerModels.value) {
-      if (!m.selected) {
-        await api.post(`/keys/${keyId}/provider-models/${m.id}`)
-        m.selected = true
-      }
-    }
+    await api.put(`/keys/${keyId}/provider-models`)
+    providerModels.value.forEach(m => m.enabled = true)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -660,8 +644,8 @@ async function disableAllProviderModels() {
   disablingProviderModels.value = true
   try {
     await api.delete(`/keys/${keyId}/provider-models`)
+    providerModels.value.forEach(m => m.enabled = false)
     ElMessage.success(t('common.success'))
-    await fetchProviderModels()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -702,8 +686,8 @@ async function onDirectProviderChange() {
   try {
     const res = await api.get(`/providers/${directProviderForm.provider_id}/models`)
     const models = (res.data.models || [])
-    // 过滤：排除已在表格中显示的模型（通过 id 匹配）
-    const existingIds = new Set(providerModels.value.map((m: any) => m.id))
+    // 过滤：排除已加入白名单的模型（selected=true）
+    const existingIds = new Set(providerModels.value.filter((m: any) => m.selected).map((m: any) => m.id))
     directAvailableModels.value = models
       .filter((m: any) => !existingIds.has(m.id))
       .sort((a: any, b: any) => a.model_id.localeCompare(b.model_id))
@@ -748,8 +732,8 @@ async function addSelectedProviderModels() {
 // 模型映射选择弹窗相关
 const filteredAvailableModels = computed(() => {
   const search = modelSearch.value.toLowerCase()
-  // 排除已在表格中显示的模型
-  const existingIds = new Set(models.value.map((m: any) => m.id))
+  // 排除已加入白名单的模型（selected=true）
+  const existingIds = new Set(models.value.filter((m: any) => m.selected).map((m: any) => m.id))
   return availableModelsForDialog.value.filter((m: any) => {
     if (existingIds.has(m.id)) return false
     if (!search) return true
@@ -762,7 +746,7 @@ async function showModelDialog() {
   selectedModelIDs.value = []
   // 加载所有可选的虚拟模型（?all=true 返回未加入白名单的也列出来）
   try {
-    const res = await api.get(`/keys/${keyId}/models`, { params: { all: 'true' } })
+    const res = await api.get(`/keys/${keyId}/models`)
     availableModelsForDialog.value = res.data.models || []
     modelDialogVisible.value = true
   } catch (e: any) {

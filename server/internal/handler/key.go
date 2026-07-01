@@ -440,6 +440,7 @@ type modelWithStatusResponse struct {
 	SupportsTools    bool   `json:"supports_tools"`
 	SupportsStream   bool   `json:"supports_stream"`
 	Selected         bool   `json:"selected"`
+	Enabled          bool   `json:"enabled"`
 }
 
 func (h *KeyHandler) ListModels(c *gin.Context) {
@@ -449,27 +450,19 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 		return
 	}
 
-	var allModels []model.Model
-	query := model.DB.Where("models.enabled = ?", true)
-
-	// ?all=true 返回全部启用模型（用于"添加模型映射"弹窗候选）
-	if c.Query("all") != "true" {
-		query = query.Joins("JOIN key_models ON key_models.model_id = models.id AND key_models.key_id = ?", id)
+	// 获取白名单记录（用于 selected + enabled 标记）
+	var kmRows []model.KeyModel
+	model.DB.Where("key_id = ?", id).Find(&kmRows)
+	kmMap := make(map[uint]model.KeyModel) // model_id → row
+	for _, r := range kmRows {
+		kmMap[r.ModelID] = r
 	}
 
-	if err := query.Find(&allModels).Error; err != nil {
+	// 返回全部启用模型 + selected/enabled 标记
+	var allModels []model.Model
+	if err := model.DB.Where("enabled = ?", true).Find(&allModels).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	// 获取白名单（用于标记 selected，?all=true 时需要）
-	var keyModelIDs []uint
-	if c.Query("all") == "true" {
-		model.DB.Model(&model.KeyModel{}).Where("key_id = ?", id).Pluck("model_id", &keyModelIDs)
-	}
-	keyModelMap := make(map[uint]bool)
-	for _, mid := range keyModelIDs {
-		keyModelMap[mid] = true
 	}
 
 	result := make([]modelWithStatusResponse, len(allModels))
@@ -484,10 +477,7 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 		minContext, minOutput := calculateMinTokens(mappings)
 		supportsVision, supportsTools, supportsStream := calculateCapabilitiesIntersection(mappings)
 
-		selected := true
-		if c.Query("all") == "true" {
-			selected = keyModelMap[m.ID]
-		}
+		row, exists := kmMap[m.ID]
 
 		result[i] = modelWithStatusResponse{
 			ID:               m.ID,
@@ -498,7 +488,8 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 			SupportsVision:   supportsVision,
 			SupportsTools:    supportsTools,
 			SupportsStream:   supportsStream,
-			Selected:         selected,
+			Selected:         exists,
+			Enabled:          exists && row.Enabled,
 		}
 	}
 
@@ -538,13 +529,16 @@ func (h *KeyHandler) AddModel(c *gin.Context) {
 
 	var existing model.KeyModel
 	if err := model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "association already exists"})
+		// 已存在 → 启用
+		model.DB.Model(&existing).Update("enabled", true)
+		c.JSON(http.StatusOK, gin.H{"message": "model association enabled"})
 		return
 	}
 
 	keyModel := model.KeyModel{
 		KeyID:   uint(keyID),
 		ModelID: uint(modelID),
+		Enabled: true,
 	}
 	if err := model.DB.Create(&keyModel).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -579,9 +573,44 @@ func (h *KeyHandler) ClearModels(c *gin.Context) {
 		return
 	}
 
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyModel{})
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Update("enabled", false)
 
-	c.JSON(http.StatusOK, gin.H{"message": "all model associations cleared"})
+	c.JSON(http.StatusOK, gin.H{"message": "all model associations disabled"})
+}
+
+// EnableAllModels 批量启用映射白名单（全部设为 enabled=true）
+// PUT /keys/:id/models
+func (h *KeyHandler) EnableAllModels(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Update("enabled", true)
+	c.JSON(http.StatusOK, gin.H{"message": "all model associations enabled"})
+}
+
+// ToggleModel 切换映射模型启用状态
+// PUT /keys/:id/models/:model_id
+func (h *KeyHandler) ToggleModel(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	modelID, err := strconv.ParseUint(c.Param("model_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
+		return
+	}
+
+	var km model.KeyModel
+	if err := model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).First(&km).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "model not in whitelist"})
+		return
+	}
+	model.DB.Model(&km).Update("enabled", !km.Enabled)
+	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": !km.Enabled})
 }
 
 // ── Provider (模型厂商) handlers ──
@@ -753,9 +782,10 @@ type providerModelWithStatusResponse struct {
 	ContextWindow int    `json:"context_window"`
 	MaxOutput     int    `json:"max_output"`
 	Selected      bool   `json:"selected"`
+	Enabled       bool   `json:"enabled"`
 }
 
-// ListProviderModels 列出某 key 可直通的模型（按厂商分组返回）
+// ListProviderModels 列出某 key 可直通的模型（全量 + selected/enabled 标记）
 // GET /keys/:id/provider-models
 func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -764,12 +794,12 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 		return
 	}
 
-	// 获取该 key 已选中的 provider_model_id
-	var selectedIDs []uint
-	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &selectedIDs)
-	selectedMap := make(map[uint]bool)
-	for _, id := range selectedIDs {
-		selectedMap[id] = true
+	// 获取白名单记录（用于 selected + enabled 标记）
+	var kpmRows []model.KeyProviderModel
+	model.DB.Where("key_id = ?", keyID).Find(&kpmRows)
+	kpmMap := make(map[uint]model.KeyProviderModel) // provider_model_id → row
+	for _, r := range kpmRows {
+		kpmMap[r.ProviderModelID] = r
 	}
 
 	// 获取 key 格式确定协议类型
@@ -808,6 +838,7 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 		if pm.Provider != nil {
 			providerName = pm.Provider.Name
 		}
+		row, exists := kpmMap[pm.ID]
 		result = append(result, providerModelWithStatusResponse{
 			ID:            pm.ID,
 			ProviderID:    pm.ProviderID,
@@ -817,14 +848,15 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 			OwnedBy:       pm.OwnedBy,
 			ContextWindow: pm.ContextWindow,
 			MaxOutput:     pm.MaxOutput,
-			Selected:      selectedMap[pm.ID],
+			Selected:      exists,
+			Enabled:       exists && row.Enabled,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"models": result})
 }
 
-// AddProviderModel 添加一个直通模型到白名单
+// AddProviderModel 添加直通模型（upsert: 已存在则启用，不存在则创建）
 // POST /keys/:id/provider-models/:pmid
 func (h *KeyHandler) AddProviderModel(c *gin.Context) {
 	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -852,13 +884,16 @@ func (h *KeyHandler) AddProviderModel(c *gin.Context) {
 
 	var existing model.KeyProviderModel
 	if err := model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "already added"})
+		// 已存在 → 启用
+		model.DB.Model(&existing).Update("enabled", true)
+		c.JSON(http.StatusOK, gin.H{"message": "provider model enabled"})
 		return
 	}
 
 	kpm := model.KeyProviderModel{
 		KeyID:           uint(keyID),
 		ProviderModelID: uint(pmid),
+		Enabled:         true,
 	}
 	if err := model.DB.Create(&kpm).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -884,7 +919,7 @@ func (h *KeyHandler) RemoveProviderModel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "provider model removed"})
 }
 
-// ClearProviderModels 清空直通白名单（= 全部允许）
+// ClearProviderModels 批量禁用直通白名单（全部设为 enabled=false）
 // DELETE /keys/:id/provider-models
 func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
 	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -892,8 +927,43 @@ func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
 	}
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyProviderModel{})
-	c.JSON(http.StatusOK, gin.H{"message": "all provider models cleared"})
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Update("enabled", false)
+	c.JSON(http.StatusOK, gin.H{"message": "all provider models disabled"})
+}
+
+// EnableAllProviderModels 批量启用直通白名单（全部设为 enabled=true）
+// PUT /keys/:id/provider-models
+func (h *KeyHandler) EnableAllProviderModels(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Update("enabled", true)
+	c.JSON(http.StatusOK, gin.H{"message": "all provider models enabled"})
+}
+
+// ToggleProviderModel 切换直通模型启用状态
+// PUT /keys/:id/provider-models/:pmid
+func (h *KeyHandler) ToggleProviderModel(c *gin.Context) {
+	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+		return
+	}
+	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
+		return
+	}
+
+	var kpm model.KeyProviderModel
+	if err := model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).First(&kpm).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "provider model not in whitelist"})
+		return
+	}
+	model.DB.Model(&kpm).Update("enabled", !kpm.Enabled)
+	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": !kpm.Enabled})
 }
 
 // checkModelIDConflict 检查某个 modelID 是否同时出现在该 key 的"模型映射"白名单中。

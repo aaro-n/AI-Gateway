@@ -224,6 +224,7 @@ type KeyModel struct {
 	ID      uint `gorm:"primaryKey"`
 	KeyID   uint `gorm:"index"`
 	ModelID uint `gorm:"index"`
+	Enabled bool `gorm:"type:boolean;default:true"`
 
 	CreatedAt time.Time
 
@@ -254,6 +255,7 @@ type KeyProviderModel struct {
 	ID              uint `gorm:"primaryKey"`
 	KeyID           uint `gorm:"index;not null;uniqueIndex:idx_key_provider_model"`
 	ProviderModelID uint `gorm:"index;not null;uniqueIndex:idx_key_provider_model"`
+	Enabled         bool `gorm:"type:boolean;default:true"`
 
 	CreatedAt time.Time
 
