@@ -197,7 +197,7 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 
-const serviceId = Number(route.params.id)
+const serviceId = route.params.id as string
 const service = ref<any>(null)
 const loading = ref(false)
 const syncing = ref(false)

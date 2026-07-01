@@ -344,7 +344,7 @@ const route = useRoute()
 
 const { copy } = useCopyText()
 
-const keyId = Number(route.params.id)
+const keyId = route.params.id as string
 const key = ref<any>(null)
 const loading = ref(false)
 const resetting = ref(false)
