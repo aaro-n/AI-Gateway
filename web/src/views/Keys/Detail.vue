@@ -53,9 +53,9 @@
             <el-table-column :label="t('common.status')" width="70" prop="enabled" sortable>
               <template #default="{ row }">
                 <el-tooltip v-if="!key?.enabled" content="密钥已禁用" placement="top">
-                  <el-switch v-model="row.enabled" disabled />
+                  <el-switch :model-value="row.enabled" disabled />
                 </el-tooltip>
-                <el-switch v-else v-model="row.enabled" @change="toggleProviderModel(row)" />
+                <el-switch v-else :model-value="row.enabled" @update:model-value="toggleProviderModel(row)" />
               </template>
             </el-table-column>
             <el-table-column :label="t('common.action')" width="70">
@@ -104,9 +104,9 @@
             <el-table-column :label="t('common.status')" width="70" prop="enabled" sortable>
               <template #default="{ row }">
                 <el-tooltip v-if="!key?.enabled" :content="t('key.keyDisabled')" placement="top">
-                  <el-switch v-model="row.enabled" disabled />
+                  <el-switch :model-value="row.enabled" disabled />
                 </el-tooltip>
-                <el-switch v-else v-model="row.enabled" @change="toggleModel(row)" />
+                <el-switch v-else :model-value="row.enabled" @update:model-value="toggleModel(row)" />
               </template>
             </el-table-column>
             <el-table-column :label="t('common.action')" width="70">
@@ -520,14 +520,10 @@ async function fetchPrompts() {
 }
 
 async function toggleModel(row: any) {
-  // v-model 在 @change 之前已更新 row.enabled → 回滚后 PUT，用服务端响应修正
-  const newState = row.enabled
-  row.enabled = !newState // 先回滚
   try {
     const res = await api.put(`/keys/${keyId}/models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
-    row.enabled = newState // 恢复用户操作
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
@@ -543,13 +539,10 @@ async function removeModel(row: any) {
 }
 
 async function toggleProviderModel(row: any) {
-  const newState = row.enabled
-  row.enabled = !newState
   try {
     const res = await api.put(`/keys/${keyId}/provider-models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
-    row.enabled = newState
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
