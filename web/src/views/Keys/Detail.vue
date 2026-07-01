@@ -389,9 +389,17 @@ const toolsLoading = ref(false)
 const resourcesLoading = ref(false)
 const promptsLoading = ref(false)
 
-// 跟踪用户手动删除的模型 ID（切换 tab 或刷新后保持隐藏）
-const hiddenProviderIds = ref<number[]>([])
-const hiddenModelIds = ref<number[]>([])
+// 跟踪用户手动删除的模型 ID（localStorage 持久化，刷新后仍隐藏）
+function loadHidden(storageKey: string): number[] {
+  try { const raw = localStorage.getItem(storageKey); return raw ? JSON.parse(raw) : [] } catch { return [] }
+}
+function saveHidden(storageKey: string, ids: number[]) {
+  localStorage.setItem(storageKey, JSON.stringify(ids))
+}
+const hiddenProviderStorageKey = `key-${keyId}-hidden-providers`
+const hiddenModelStorageKey = `key-${keyId}-hidden-models`
+const hiddenProviderIds = ref<number[]>(loadHidden(hiddenProviderStorageKey))
+const hiddenModelIds = ref<number[]>(loadHidden(hiddenModelStorageKey))
 
 const enablingModels = ref(false)
 const enablingProviderModels = ref(false)
@@ -542,6 +550,7 @@ async function removeModel(row: any) {
     // 从表格移除，但不影响后端数据（后端下次仍返回，但我们过滤掉）
     models.value = models.value.filter((m: any) => m.id !== row.id)
     hiddenModelIds.value = [...hiddenModelIds.value, row.id]
+    saveHidden(hiddenModelStorageKey, hiddenModelIds.value)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -567,6 +576,7 @@ async function removeProviderModel(row: any) {
     await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
     // 记录为已删除，下次 fetch 时过滤掉
     hiddenProviderIds.value = [...hiddenProviderIds.value, row.id]
+    saveHidden(hiddenProviderStorageKey, hiddenProviderIds.value)
     providerModels.value = providerModels.value.filter((m: any) => m.id !== row.id)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
@@ -760,6 +770,7 @@ async function addSelectedProviderModels() {
         await api.post(`/keys/${keyId}/provider-models/${pmid}`)
         // 如果之前被删除过，从 hidden 中移除
         hiddenProviderIds.value = hiddenProviderIds.value.filter(id => id !== pmid)
+        saveHidden(hiddenProviderStorageKey, hiddenProviderIds.value)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
@@ -815,6 +826,7 @@ async function addSelectedModels() {
       try {
         await api.post(`/keys/${keyId}/models/${mid}`)
         hiddenModelIds.value = hiddenModelIds.value.filter(id => id !== mid)
+        saveHidden(hiddenModelStorageKey, hiddenModelIds.value)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
