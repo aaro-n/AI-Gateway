@@ -21,7 +21,10 @@
           {{ key?.expires_at ? new Date(key.expires_at).toLocaleString() : '-' }}
         </el-descriptions-item>
         <el-descriptions-item :label="t('key.key')">
-          <code>{{ key?.key }}</code>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <code>{{ key?.key }}</code>
+            <el-tag v-if="keyProtocolLabel" :type="keyProtocolType" size="small" effect="plain">{{ keyProtocolLabel }}</el-tag>
+          </div>
         </el-descriptions-item>
       </el-descriptions>
       <div class="actions">
@@ -349,11 +352,32 @@ const activeTab = ref('providers')
 const keyDialogVisible = ref(false)
 const newKey = ref('')
 
+const providerLabels: Record<string, { label: string; type: string }> = {
+  openai: { label: 'OpenAI', type: 'success' },
+  anthropic: { label: 'Anthropic', type: 'primary' },
+  gemini: { label: 'Gemini', type: 'warning' },
+  deepseek: { label: 'DeepSeek', type: 'danger' },
+}
+
+const keyProtocolLabel = computed(() => {
+  if (!key.value?.formats) return ''
+  const fmtKeys = Object.keys(key.value.formats)
+  const fmt = fmtKeys[0]
+  if (!fmt) return ''
+  return providerLabels[fmt]?.label || fmt.toUpperCase()
+})
+
+const keyProtocolType = computed((): 'success' | 'primary' | 'warning' | 'danger' | 'info' => {
+  if (!key.value?.formats) return 'info'
+  const fmtKeys = Object.keys(key.value.formats)
+  const fmt = fmtKeys[0]
+  if (!fmt) return 'info'
+  return (providerLabels[fmt]?.type as any) || 'info'
+})
+
 const models = ref<any[]>([])
 const providers = ref<any[]>([])
 const providerModels = ref<any[]>([])
-const allProviderModels = ref<any[]>([])  // 所有可选的直通模型（含未选中）
-const allAvailableModels = ref<any[]>([]) // 所有可选的映射模型（含未选中）
 const tools = ref<any[]>([])
 const resources = ref<any[]>([])
 const prompts = ref<any[]>([])
@@ -365,9 +389,9 @@ const toolsLoading = ref(false)
 const resourcesLoading = ref(false)
 const promptsLoading = ref(false)
 
-// 跟踪已关联（曾经添加过）的模型 ID
-const knownProviderModelIds = ref<Set<number>>(new Set())
-const knownModelIds = ref<Set<number>>(new Set())
+// 跟踪用户手动删除的模型 ID（切换 tab 或刷新后保持隐藏）
+const hiddenProviderIds = ref<number[]>([])
+const hiddenModelIds = ref<number[]>([])
 
 const enablingModels = ref(false)
 const enablingProviderModels = ref(false)
@@ -386,6 +410,7 @@ const directAvailableModels = ref<any[]>([])
 const directModelSearch = ref('')
 const directSelectedModelIDs = ref<number[]>([])
 const directModelTableRef = ref<any>(null)
+const availableModelsForDialog = ref<any[]>([])
 const directProviderForm = reactive({
   provider_id: null as number | null,
 })
@@ -450,16 +475,7 @@ async function fetchModels() {
   modelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/models`)
-    allAvailableModels.value = res.data.models || []
-    // 初始化 known set（首次加载时只包含已关联 selected 的模型）
-    if (knownModelIds.value.size === 0) {
-      const ids = allAvailableModels.value
-        .filter((m: any) => m.selected)
-        .map((m: any) => m.id)
-      knownModelIds.value = new Set(ids)
-    }
-    // 只显示在 known set 中的模型（即已关联或曾关联的）
-    models.value = allAvailableModels.value.filter((m: any) => knownModelIds.value.has(m.id))
+    models.value = (res.data.models || []).filter((m: any) => !hiddenModelIds.value.includes(m.id))
   } finally {
     modelsLoading.value = false
   }
@@ -469,16 +485,8 @@ async function fetchProviderModels() {
   providerModelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/provider-models`)
-    allProviderModels.value = res.data.models || []
-    // 初始化 known set（首次加载时只包含已关联 selected 的模型）
-    if (knownProviderModelIds.value.size === 0) {
-      const ids = allProviderModels.value
-        .filter((m: any) => m.selected)
-        .map((m: any) => m.id)
-      knownProviderModelIds.value = new Set(ids)
-    }
-    // 只显示在 known set 中的模型（即已关联或曾关联的）
-    providerModels.value = allProviderModels.value.filter((m: any) => knownProviderModelIds.value.has(m.id))
+    // 只显示未被删除的模型（hiddenProviderIds 记录已删除的 ID）
+    providerModels.value = (res.data.models || []).filter((m: any) => !hiddenProviderIds.value.includes(m.id))
   } finally {
     providerModelsLoading.value = false
   }
@@ -519,10 +527,8 @@ async function toggleModel(row: any) {
   try {
     if (row.selected) {
       await api.post(`/keys/${keyId}/models/${row.id}`)
-      knownModelIds.value = new Set([...knownModelIds.value, row.id])
     } else {
       await api.delete(`/keys/${keyId}/models/${row.id}`)
-      row.selected = false
     }
   } catch (e: any) {
     row.selected = previousValue
@@ -533,12 +539,9 @@ async function toggleModel(row: any) {
 async function removeModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/models/${row.id}`)
-    // 从 known set 移除，后续可重新添加
-    const newKnown = new Set(knownModelIds.value)
-    newKnown.delete(row.id)
-    knownModelIds.value = newKnown
-    // 从表格移除
+    // 从表格移除，但不影响后端数据（后端下次仍返回，但我们过滤掉）
     models.value = models.value.filter((m: any) => m.id !== row.id)
+    hiddenModelIds.value = [...hiddenModelIds.value, row.id]
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -550,10 +553,8 @@ async function toggleProviderModel(row: any) {
   try {
     if (row.selected) {
       await api.post(`/keys/${keyId}/provider-models/${row.id}`)
-      knownProviderModelIds.value = new Set([...knownProviderModelIds.value, row.id])
     } else {
       await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
-      row.selected = false
     }
   } catch (e: any) {
     row.selected = previousValue
@@ -564,11 +565,8 @@ async function toggleProviderModel(row: any) {
 async function removeProviderModel(row: any) {
   try {
     await api.delete(`/keys/${keyId}/provider-models/${row.id}`)
-    // 从 known set 移除，后续可重新添加
-    const newKnown = new Set(knownProviderModelIds.value)
-    newKnown.delete(row.id)
-    knownProviderModelIds.value = newKnown
-    // 从表格移除
+    // 记录为已删除，下次 fetch 时过滤掉
+    hiddenProviderIds.value = [...hiddenProviderIds.value, row.id]
     providerModels.value = providerModels.value.filter((m: any) => m.id !== row.id)
     ElMessage.success(t('common.success'))
   } catch (e: any) {
@@ -638,15 +636,21 @@ async function enableAllModels() {
 
 async function disableAllModels() {
   disablingModels.value = true
+  let errorMsg = ''
   try {
-    // 将表格中已启用的模型全部 DELETE 禁用
     for (const m of models.value) {
       if (m.selected) {
-        await api.delete(`/keys/${keyId}/models/${m.id}`)
-        m.selected = false
+        try {
+          await api.delete(`/keys/${keyId}/models/${m.id}`)
+          m.selected = false
+        } catch (e: any) {
+          errorMsg = e.response?.data?.error || t('common.error')
+          break
+        }
       }
     }
-    ElMessage.success(t('common.success'))
+    if (!errorMsg) ElMessage.success(t('common.success'))
+    else ElMessage.error(errorMsg)
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -674,15 +678,21 @@ async function enableAllProviderModels() {
 
 async function disableAllProviderModels() {
   disablingProviderModels.value = true
+  let errorMsg = ''
   try {
-    // 将表格中已启用的直通模型全部 DELETE 禁用
     for (const m of providerModels.value) {
       if (m.selected) {
-        await api.delete(`/keys/${keyId}/provider-models/${m.id}`)
-        m.selected = false
+        try {
+          await api.delete(`/keys/${keyId}/provider-models/${m.id}`)
+          m.selected = false
+        } catch (e: any) {
+          errorMsg = e.response?.data?.error || t('common.error')
+          break
+        }
       }
     }
-    ElMessage.success(t('common.success'))
+    if (!errorMsg) ElMessage.success(t('common.success'))
+    else ElMessage.error(errorMsg)
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -723,9 +733,10 @@ async function onDirectProviderChange() {
   try {
     const res = await api.get(`/providers/${directProviderForm.provider_id}/models`)
     const models = (res.data.models || [])
-    // 过滤：只排除已在「模型厂商」tab 中添加的模型
+    // 过滤：排除已在表格中显示的模型（通过 id 匹配）
+    const existingIds = new Set(providerModels.value.map((m: any) => m.id))
     directAvailableModels.value = models
-      .filter((m: any) => !knownProviderModelIds.value.has(m.id))
+      .filter((m: any) => !existingIds.has(m.id))
       .sort((a: any, b: any) => a.model_id.localeCompare(b.model_id))
   } catch {
     directAvailableModels.value = []
@@ -743,22 +754,19 @@ async function addSelectedProviderModels() {
   addingProviderModels.value = true
   let successCount = 0
   let errorMsg = ''
-  const newKnown = new Set(knownProviderModelIds.value)
   try {
     for (const pmid of directSelectedModelIDs.value) {
       try {
         await api.post(`/keys/${keyId}/provider-models/${pmid}`)
-        newKnown.add(pmid)
+        // 如果之前被删除过，从 hidden 中移除
+        hiddenProviderIds.value = hiddenProviderIds.value.filter(id => id !== pmid)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
         break
       }
     }
-    if (successCount > 0) {
-      knownProviderModelIds.value = newKnown
-      ElMessage.success(t('common.success'))
-    }
+    if (successCount > 0) ElMessage.success(t('common.success'))
     if (errorMsg) ElMessage.error(errorMsg)
     providerModelDialogVisible.value = false
     await fetchProviderModels()
@@ -772,9 +780,10 @@ async function addSelectedProviderModels() {
 // 模型映射选择弹窗相关
 const filteredAvailableModels = computed(() => {
   const search = modelSearch.value.toLowerCase()
-  // 排除所有已知关联模型（黑名单已在 fetch 时从 known set 排除）
-  return allAvailableModels.value.filter((m: any) => {
-    if (knownModelIds.value.has(m.id)) return false
+  // 排除已在表格中显示的模型
+  const existingIds = new Set(models.value.map((m: any) => m.id))
+  return availableModelsForDialog.value.filter((m: any) => {
+    if (existingIds.has(m.id)) return false
     if (!search) return true
     return m.name?.toLowerCase().includes(search)
   })
@@ -786,7 +795,7 @@ async function showModelDialog() {
   // 加载所有可选的虚拟模型
   try {
     const res = await api.get(`/keys/${keyId}/models`)
-    allAvailableModels.value = res.data.models || []
+    availableModelsForDialog.value = res.data.models || []
     modelDialogVisible.value = true
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -801,25 +810,19 @@ async function addSelectedModels() {
   addingModels.value = true
   let successCount = 0
   let errorMsg = ''
-  const newKnown = new Set(knownModelIds.value)
   try {
     for (const mid of selectedModelIDs.value) {
       try {
         await api.post(`/keys/${keyId}/models/${mid}`)
-        newKnown.add(mid)
+        hiddenModelIds.value = hiddenModelIds.value.filter(id => id !== mid)
         successCount++
       } catch (e: any) {
         errorMsg = e.response?.data?.error || t('common.error')
         break
       }
     }
-    if (successCount > 0) {
-      knownModelIds.value = newKnown
-      ElMessage.success(`成功添加 ${successCount} 个模型`)
-    }
-    if (errorMsg) {
-      ElMessage.error(errorMsg)
-    }
+    if (successCount > 0) ElMessage.success(`成功添加 ${successCount} 个模型`)
+    if (errorMsg) ElMessage.error(errorMsg)
     modelDialogVisible.value = false
     await fetchModels()
   } finally {
