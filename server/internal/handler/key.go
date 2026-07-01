@@ -161,6 +161,7 @@ type keyListItemResponse struct {
 	AccessMode        string             `json:"access_mode"`
 	ExpiresAt         *time.Time         `json:"expires_at"`
 	CreatedAt         time.Time          `json:"created_at"`
+	Slug              string             `json:"slug"`
 	Models            []keyModelResponse `json:"models,omitempty"`
 	MCPToolsCount     int                `json:"mcp_tools_count"`
 	MCPResourcesCount int                `json:"mcp_resources_count"`
@@ -217,6 +218,7 @@ func (h *KeyHandler) List(c *gin.Context) {
 			AccessMode:        k.AccessMode,
 			ExpiresAt:         k.ExpiresAt,
 			CreatedAt:         k.CreatedAt,
+			Slug:              k.Slug,
 			Models:            models,
 			MCPToolsCount:     int(mcpToolsCount),
 			MCPResourcesCount: int(mcpResourcesCount),
@@ -422,7 +424,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"key": keyResponse{
 		ID:         key.ID,
-			Slug:       key.Slug,
+		Slug:       key.Slug,
 		Key:        key.Key,
 		Name:       key.Name,
 		Enabled:    key.Enabled,
@@ -1032,7 +1034,7 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
 			ID:        key.ID,
-			Slug:       key.Slug,
+			Slug:      key.Slug,
 			Key:       maskedKey,
 			Name:      key.Name,
 			Enabled:   key.Enabled,
