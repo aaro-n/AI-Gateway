@@ -609,8 +609,9 @@ func (h *KeyHandler) ToggleModel(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "model not in whitelist"})
 		return
 	}
-	model.DB.Model(&km).Update("enabled", !km.Enabled)
-	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": !km.Enabled})
+	newVal := !km.Enabled
+	model.DB.Model(&km).Update("enabled", newVal)
+	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": newVal})
 }
 
 // ── Provider (模型厂商) handlers ──
@@ -962,8 +963,9 @@ func (h *KeyHandler) ToggleProviderModel(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "provider model not in whitelist"})
 		return
 	}
-	model.DB.Model(&kpm).Update("enabled", !kpm.Enabled)
-	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": !kpm.Enabled})
+	newVal := !kpm.Enabled
+	model.DB.Model(&kpm).Update("enabled", newVal)
+	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": newVal})
 }
 
 // checkModelIDConflict 检查某个 modelID 是否同时出现在该 key 的"模型映射"白名单中。
