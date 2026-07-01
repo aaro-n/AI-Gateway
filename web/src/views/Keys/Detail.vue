@@ -482,7 +482,8 @@ async function fetchProviderModels() {
   providerModelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/provider-models`)
-    providerModels.value = res.data.models || []
+    // 只显示白名单中的模型（selected=true，删除后下次不显示）
+    providerModels.value = (res.data.models || []).filter((m: any) => m.selected)
   } finally {
     providerModelsLoading.value = false
   }
