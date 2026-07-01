@@ -781,8 +781,7 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 	var pms []model.ProviderModel
 	query := model.DB.Preload("Provider").
 		Joins("JOIN key_provider_models kpm ON kpm.provider_model_id = provider_models.id AND kpm.key_id = ?", uint(keyID)).
-		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true).
-		Where("provider_models.is_available = ?", true)
+		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true)
 
 	if cond, ok := fieldMap[protocol]; ok {
 		query = query.Where(cond)
