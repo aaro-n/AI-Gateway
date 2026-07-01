@@ -519,12 +519,14 @@ async function fetchPrompts() {
 }
 
 async function toggleModel(row: any) {
-  const previousValue = !row.enabled
+  // v-model 在 @change 之前已更新 row.enabled → 回滚后 PUT，用服务端响应修正
+  const newState = row.enabled
+  row.enabled = !newState // 先回滚
   try {
     const res = await api.put(`/keys/${keyId}/models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
-    row.enabled = previousValue
+    row.enabled = newState // 恢复用户操作
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
@@ -540,12 +542,13 @@ async function removeModel(row: any) {
 }
 
 async function toggleProviderModel(row: any) {
-  const previousValue = !row.enabled
+  const newState = row.enabled
+  row.enabled = !newState
   try {
     const res = await api.put(`/keys/${keyId}/provider-models/${row.id}`)
     row.enabled = res.data.enabled
   } catch (e: any) {
-    row.enabled = previousValue
+    row.enabled = newState
     ElMessage.error(e.response?.data?.error || t('common.error'))
   }
 }
