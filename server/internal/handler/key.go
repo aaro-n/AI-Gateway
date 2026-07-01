@@ -450,14 +450,23 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 	}
 
 	var allModels []model.Model
-	if err := model.DB.Where("enabled = ?", true).Find(&allModels).Error; err != nil {
+	query := model.DB.Where("models.enabled = ?", true)
+
+	// ?all=true 返回全部启用模型（用于"添加模型映射"弹窗候选）
+	if c.Query("all") != "true" {
+		query = query.Joins("JOIN key_models ON key_models.model_id = models.id AND key_models.key_id = ?", id)
+	}
+
+	if err := query.Find(&allModels).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// 获取白名单（用于标记 selected，?all=true 时需要）
 	var keyModelIDs []uint
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", id).Pluck("model_id", &keyModelIDs)
-
+	if c.Query("all") == "true" {
+		model.DB.Model(&model.KeyModel{}).Where("key_id = ?", id).Pluck("model_id", &keyModelIDs)
+	}
 	keyModelMap := make(map[uint]bool)
 	for _, mid := range keyModelIDs {
 		keyModelMap[mid] = true
@@ -475,6 +484,11 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 		minContext, minOutput := calculateMinTokens(mappings)
 		supportsVision, supportsTools, supportsStream := calculateCapabilitiesIntersection(mappings)
 
+		selected := true
+		if c.Query("all") == "true" {
+			selected = keyModelMap[m.ID]
+		}
+
 		result[i] = modelWithStatusResponse{
 			ID:               m.ID,
 			Name:             m.Name,
@@ -484,7 +498,7 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 			SupportsVision:   supportsVision,
 			SupportsTools:    supportsTools,
 			SupportsStream:   supportsStream,
-			Selected:         keyModelMap[m.ID],
+			Selected:         selected,
 		}
 	}
 

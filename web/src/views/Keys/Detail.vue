@@ -627,21 +627,10 @@ async function enableAllModels() {
 
 async function disableAllModels() {
   disablingModels.value = true
-  let errorMsg = ''
   try {
-    for (const m of models.value) {
-      if (m.selected) {
-        try {
-          await api.delete(`/keys/${keyId}/models/${m.id}`)
-          m.selected = false
-        } catch (e: any) {
-          errorMsg = e.response?.data?.error || t('common.error')
-          break
-        }
-      }
-    }
-    if (!errorMsg) ElMessage.success(t('common.success'))
-    else ElMessage.error(errorMsg)
+    await api.delete(`/keys/${keyId}/models`)
+    ElMessage.success(t('common.success'))
+    await fetchModels()
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
   } finally {
@@ -771,9 +760,9 @@ const filteredAvailableModels = computed(() => {
 async function showModelDialog() {
   modelSearch.value = ''
   selectedModelIDs.value = []
-  // 加载所有可选的虚拟模型
+  // 加载所有可选的虚拟模型（?all=true 返回未加入白名单的也列出来）
   try {
-    const res = await api.get(`/keys/${keyId}/models`)
+    const res = await api.get(`/keys/${keyId}/models`, { params: { all: 'true' } })
     availableModelsForDialog.value = res.data.models || []
     modelDialogVisible.value = true
   } catch (e: any) {
