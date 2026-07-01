@@ -40,6 +40,7 @@ type keyModelResponse struct {
 
 type keyResponse struct {
 	ID         uint               `json:"id"`
+	Slug       string             `json:"slug"`
 	Key        string             `json:"key"`
 	Name       string             `json:"name"`
 	Enabled    bool               `json:"enabled"`
@@ -310,6 +311,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"key": keyResponse{
 			ID:         key.ID,
+			Slug:       key.Slug,
 			Key:        rawKey,
 			Name:       key.Name,
 			Enabled:    key.Enabled,
@@ -420,6 +422,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"key": keyResponse{
 		ID:         key.ID,
+			Slug:       key.Slug,
 		Key:        key.Key,
 		Name:       key.Name,
 		Enabled:    key.Enabled,
@@ -1029,6 +1032,7 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
 			ID:        key.ID,
+			Slug:       key.Slug,
 			Key:       maskedKey,
 			Name:      key.Name,
 			Enabled:   key.Enabled,
@@ -1115,6 +1119,7 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
 			ID:         key.ID,
+			Slug:       key.Slug,
 			Key:        maskedKey,
 			Name:       key.Name,
 			Enabled:    key.Enabled,

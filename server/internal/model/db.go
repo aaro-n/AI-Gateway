@@ -1,8 +1,10 @@
 package model
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,6 +34,7 @@ func (User) TableName() string {
 
 type Provider struct {
 	ID               uint   `gorm:"primaryKey"`
+	Slug             string `gorm:"uniqueIndex;size:8"`
 	Name             string `gorm:"uniqueIndex"`
 	OpenAIBaseURL    string `gorm:"column:openai_base_url"`
 	AnthropicBaseURL string `gorm:"column:anthropic_base_url"`
@@ -47,6 +50,13 @@ type Provider struct {
 	UpdatedAt        time.Time
 	DeletedAt        gorm.DeletedAt
 	Models           []ProviderModel
+}
+
+func (p *Provider) BeforeCreate(tx *gorm.DB) error {
+	if p.Slug == "" {
+		p.Slug = generateSlug(tx, "providers")
+	}
+	return nil
 }
 
 func (Provider) TableName() string {
@@ -80,12 +90,20 @@ func (ProviderModel) TableName() string {
 
 type Model struct {
 	ID        uint   `gorm:"primaryKey"`
+	Slug      string `gorm:"uniqueIndex;size:8"`
 	Name      string `gorm:"uniqueIndex;column:name"`
 	Enabled   bool   `gorm:"type:boolean;default:true"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt gorm.DeletedAt
 	Mappings  []ModelMapping `gorm:"foreignKey:ModelID"`
+}
+
+func (m *Model) BeforeCreate(tx *gorm.DB) error {
+	if m.Slug == "" {
+		m.Slug = generateSlug(tx, "models")
+	}
+	return nil
 }
 
 func (Model) TableName() string {
@@ -111,6 +129,7 @@ func (ModelMapping) TableName() string {
 
 type MCP struct {
 	ID   uint   `gorm:"primaryKey"`
+	Slug string `gorm:"uniqueIndex;size:8"`
 	Name string `gorm:"uniqueIndex;size:200;not null"`
 	Type string `gorm:"type:varchar(20);not null"`
 
@@ -124,6 +143,13 @@ type MCP struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt gorm.DeletedAt `gorm:"index"`
+}
+
+func (m *MCP) BeforeCreate(tx *gorm.DB) error {
+	if m.Slug == "" {
+		m.Slug = generateSlug(tx, "mcps")
+	}
+	return nil
 }
 
 func (MCP) TableName() string {
@@ -187,6 +213,7 @@ func (MCPPrompt) TableName() string {
 
 type Key struct {
 	ID         uint   `gorm:"primaryKey"`
+	Slug       string `gorm:"uniqueIndex;size:8"`
 	Key        string `gorm:"uniqueIndex"`
 	Name       string
 	Enabled    bool   `gorm:"type:boolean;default:true"`
@@ -202,6 +229,13 @@ type Key struct {
 	MCPResources []KeyMCPResource
 	MCPPrompts   []KeyMCPPrompt
 	Formats      []KeyFormat `gorm:"foreignKey:KeyID"`
+}
+
+func (k *Key) BeforeCreate(tx *gorm.DB) error {
+	if k.Slug == "" {
+		k.Slug = generateSlug(tx, "keys")
+	}
+	return nil
 }
 
 func (Key) TableName() string {
@@ -465,6 +499,10 @@ func InitDB(
 		return err
 	}
 
+	if err := migrateSlugs(); err != nil {
+		log.Printf("[Database] Warning: slug migration failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -519,4 +557,55 @@ func migrateKeyFormats() error {
 
 func GetDB() *gorm.DB {
 	return DB
+}
+
+// ── Slug 生成 ──
+
+const slugChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+func generateSlug(tx *gorm.DB, table string) string {
+	for i := 0; i < 5; i++ {
+		s := randomSlug()
+		var count int64
+		tx.Table(table).Where("slug = ?", s).Count(&count)
+		if count == 0 {
+			return s
+		}
+	}
+	// 5 次碰撞 → 极其罕见，用更长 slug
+	return randomSlug() + randomSlug()[:2]
+}
+
+func randomSlug() string {
+	b := make([]byte, 6)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(slugChars))))
+		b[i] = slugChars[n.Int64()]
+	}
+	return string(b)
+}
+
+func migrateSlugs() error {
+	for _, info := range []struct {
+		table string
+		model interface{}
+	}{
+		{"keys", &Key{}},
+		{"providers", &Provider{}},
+		{"models", &Model{}},
+		{"mcps", &MCP{}},
+	} {
+		var count int64
+		DB.Table(info.table).Where("slug = '' OR slug IS NULL").Count(&count)
+		if count > 0 {
+			var items []map[string]interface{}
+			DB.Table(info.table).Where("slug = '' OR slug IS NULL").Find(&items)
+			for _, item := range items {
+				slug := generateSlug(DB, info.table)
+				DB.Table(info.table).Where("id = ?", item["id"]).Update("slug", slug)
+			}
+			log.Printf("[Database] Migrated %d slugs for %s", count, info.table)
+		}
+	}
+	return nil
 }
