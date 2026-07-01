@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 )
 
 type ModelHandler struct{}
@@ -130,7 +131,7 @@ func (h *ModelHandler) List(c *gin.Context) {
 }
 
 func (h *ModelHandler) Get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -196,7 +197,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 }
 
 func (h *ModelHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -255,7 +256,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 }
 
 func (h *ModelHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -277,7 +278,7 @@ func (h *ModelHandler) Delete(c *gin.Context) {
 }
 
 func (h *ModelHandler) ListMappings(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -305,7 +306,7 @@ func (h *ModelHandler) ListMappings(c *gin.Context) {
 }
 
 func (h *ModelHandler) CreateMapping(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -369,7 +370,7 @@ func (h *ModelHandler) CreateMapping(c *gin.Context) {
 }
 
 func (h *ModelHandler) UpdateMapping(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	modelID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
 		return
@@ -438,7 +439,7 @@ func (h *ModelHandler) UpdateMapping(c *gin.Context) {
 }
 
 func (h *ModelHandler) DeleteMapping(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	modelID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
 		return
@@ -459,7 +460,7 @@ func (h *ModelHandler) DeleteMapping(c *gin.Context) {
 }
 
 func (h *ModelHandler) UpdateMappingsOrder(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	modelID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
 		return

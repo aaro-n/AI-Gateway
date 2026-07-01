@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +9,7 @@ import (
 
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 	protocolsPkg "ai-gateway/internal/protocols"
 	"ai-gateway/internal/router"
 )
@@ -88,7 +88,7 @@ func (h *ProviderHandler) List(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -163,7 +163,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -264,7 +264,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -350,7 +350,7 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 }
 
 func (h *ProviderHandler) Test(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return

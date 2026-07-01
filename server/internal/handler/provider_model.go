@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 	protocolsPkg "ai-gateway/internal/protocols"
 )
 
@@ -87,7 +88,7 @@ func toProviderModelResponse(m model.ProviderModel) providerModelResponse {
 }
 
 func (h *ProviderModelHandler) List(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -114,7 +115,7 @@ func (h *ProviderModelHandler) List(c *gin.Context) {
 }
 
 func (h *ProviderModelHandler) Create(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -167,7 +168,7 @@ func (h *ProviderModelHandler) Create(c *gin.Context) {
 }
 
 func (h *ProviderModelHandler) Update(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -255,7 +256,7 @@ func (h *ProviderModelHandler) Update(c *gin.Context) {
 }
 
 func (h *ProviderModelHandler) Delete(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -292,7 +293,7 @@ func (h *ProviderModelHandler) Delete(c *gin.Context) {
 }
 
 func (h *ProviderModelHandler) Sync(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return

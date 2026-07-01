@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 	protocolsPkg "ai-gateway/internal/protocols"
 )
 
@@ -70,7 +71,7 @@ type customModelTestResponse struct {
 }
 
 func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -263,7 +264,7 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 }
 
 func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return
@@ -376,7 +377,7 @@ type virtualModelTestResponse struct {
 }
 
 func (h *ModelTestHandler) TestModel(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	modelID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
 		return
@@ -596,7 +597,7 @@ type modelTestResultSummary struct {
 
 // GetTestResults 获取指定渠道所有模型的最近一次测试结果
 func (h *ModelTestHandler) GetTestResults(c *gin.Context) {
-	providerID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	providerID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
 		return

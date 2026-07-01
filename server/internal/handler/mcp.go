@@ -4,13 +4,13 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 )
 
 var mcpManager = mcp.NewMCPManager()
@@ -156,7 +156,7 @@ func (h *MCPHandler) List(c *gin.Context) {
 }
 
 func (h *MCPHandler) Get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -172,7 +172,7 @@ func (h *MCPHandler) Get(c *gin.Context) {
 }
 
 func (h *MCPHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -269,7 +269,7 @@ func (h *MCPHandler) Update(c *gin.Context) {
 }
 
 func (h *MCPHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -288,7 +288,7 @@ func (h *MCPHandler) Delete(c *gin.Context) {
 }
 
 func (h *MCPHandler) TestConnection(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -334,7 +334,7 @@ func (h *MCPHandler) TestConnection(c *gin.Context) {
 }
 
 func (h *MCPHandler) Sync(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -379,7 +379,7 @@ func (h *MCPHandler) toResponse(m *model.MCP, toolCount, resourceCount, promptCo
 }
 
 func (h *MCPHandler) ListTools(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -407,7 +407,7 @@ func (h *MCPHandler) ListTools(c *gin.Context) {
 }
 
 func (h *MCPHandler) ListResources(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -436,7 +436,7 @@ func (h *MCPHandler) ListResources(c *gin.Context) {
 }
 
 func (h *MCPHandler) ListPrompts(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -464,7 +464,7 @@ func (h *MCPHandler) ListPrompts(c *gin.Context) {
 }
 
 func (h *MCPHandler) UpdateTool(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tool id"})
 		return
@@ -494,7 +494,7 @@ func (h *MCPHandler) UpdateTool(c *gin.Context) {
 }
 
 func (h *MCPHandler) UpdateResource(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource id"})
 		return
@@ -524,7 +524,7 @@ func (h *MCPHandler) UpdateResource(c *gin.Context) {
 }
 
 func (h *MCPHandler) UpdatePrompt(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
 		return

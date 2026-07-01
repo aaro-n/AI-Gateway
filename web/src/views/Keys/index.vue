@@ -60,7 +60,7 @@
            <template #default="{ row }">
              <el-button link type="primary" @click="showDialog(row)">{{ t('common.edit') }}</el-button>
              <el-button link type="warning" @click="handleUpdateKey(row)">更新密钥</el-button>
-             <el-button link type="default" @click="goDetail(row.id)">{{ t('common.detail') }}</el-button>
+             <el-button link type="default" @click="goDetail(row.slug || row.id)">{{ t('common.detail') }}</el-button>
              <el-button link type="danger" @click="handleDelete(row.id)">{{ t('common.delete') }}</el-button>
            </template>
          </el-table-column>
@@ -262,8 +262,8 @@ function copyKey() {
   copy(newKey.value)
 }
 
-function goDetail(id: number) {
-  router.push(`/keys/${id}`)
+function goDetail(idOrSlug: string | number) {
+  router.push(`/keys/${idOrSlug}`)
 }
 
 function handleSortChange({ prop, order }: any) {

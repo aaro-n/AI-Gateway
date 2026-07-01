@@ -12,6 +12,7 @@ import (
 
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/middleware"
 )
 
 type KeyHandler struct{}
@@ -329,7 +330,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 }
 
 func (h *KeyHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -353,7 +354,7 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 }
 
 func (h *KeyHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -449,7 +450,7 @@ type modelWithStatusResponse struct {
 }
 
 func (h *KeyHandler) ListModels(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -502,7 +503,7 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 }
 
 func (h *KeyHandler) AddModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -554,7 +555,7 @@ func (h *KeyHandler) AddModel(c *gin.Context) {
 }
 
 func (h *KeyHandler) RemoveModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -572,7 +573,7 @@ func (h *KeyHandler) RemoveModel(c *gin.Context) {
 }
 
 func (h *KeyHandler) ClearModels(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -586,7 +587,7 @@ func (h *KeyHandler) ClearModels(c *gin.Context) {
 // EnableAllModels 批量启用映射白名单（全部设为 enabled=true）
 // PUT /keys/:id/models
 func (h *KeyHandler) EnableAllModels(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -598,7 +599,7 @@ func (h *KeyHandler) EnableAllModels(c *gin.Context) {
 // ToggleModel 切换映射模型启用状态
 // PUT /keys/:id/models/:model_id
 func (h *KeyHandler) ToggleModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -647,7 +648,7 @@ func keyFormatToProtocol(format string) string {
 }
 
 func (h *KeyHandler) ListProviders(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -706,7 +707,7 @@ func (h *KeyHandler) ListProviders(c *gin.Context) {
 }
 
 func (h *KeyHandler) AddProvider(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -745,7 +746,7 @@ func (h *KeyHandler) AddProvider(c *gin.Context) {
 }
 
 func (h *KeyHandler) RemoveProvider(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -763,7 +764,7 @@ func (h *KeyHandler) RemoveProvider(c *gin.Context) {
 }
 
 func (h *KeyHandler) ClearProviders(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -794,7 +795,7 @@ type providerModelWithStatusResponse struct {
 // ListProviderModels 列出某 key 可直通的模型（全量 + selected/enabled 标记）
 // GET /keys/:id/provider-models
 func (h *KeyHandler) ListProviderModels(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -865,7 +866,7 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 // AddProviderModel 添加直通模型（upsert: 已存在则启用，不存在则创建）
 // POST /keys/:id/provider-models/:pmid
 func (h *KeyHandler) AddProviderModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -911,7 +912,7 @@ func (h *KeyHandler) AddProviderModel(c *gin.Context) {
 // RemoveProviderModel 从直通白名单移除一个模型
 // DELETE /keys/:id/provider-models/:pmid
 func (h *KeyHandler) RemoveProviderModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -928,7 +929,7 @@ func (h *KeyHandler) RemoveProviderModel(c *gin.Context) {
 // ClearProviderModels 批量禁用直通白名单（全部设为 enabled=false）
 // DELETE /keys/:id/provider-models
 func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -940,7 +941,7 @@ func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
 // EnableAllProviderModels 批量启用直通白名单（全部设为 enabled=true）
 // PUT /keys/:id/provider-models
 func (h *KeyHandler) EnableAllProviderModels(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -952,7 +953,7 @@ func (h *KeyHandler) EnableAllProviderModels(c *gin.Context) {
 // ToggleProviderModel 切换直通模型启用状态
 // PUT /keys/:id/provider-models/:pmid
 func (h *KeyHandler) ToggleProviderModel(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1005,7 +1006,7 @@ func (h *KeyHandler) checkMappingModelConflict(keyID uint, virtualModelName stri
 }
 
 func (h *KeyHandler) Get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1050,7 +1051,7 @@ type resetKeyRequest struct {
 }
 
 func (h *KeyHandler) Reset(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1146,7 +1147,7 @@ type toolWithStatusResponse struct {
 }
 
 func (h *KeyHandler) GetMCPTools(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1189,7 +1190,7 @@ func (h *KeyHandler) GetMCPTools(c *gin.Context) {
 }
 
 func (h *KeyHandler) AddMCPTool(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1232,7 +1233,7 @@ func (h *KeyHandler) AddMCPTool(c *gin.Context) {
 }
 
 func (h *KeyHandler) RemoveMCPTool(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1250,7 +1251,7 @@ func (h *KeyHandler) RemoveMCPTool(c *gin.Context) {
 }
 
 func (h *KeyHandler) ClearMCPTools(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1262,7 +1263,7 @@ func (h *KeyHandler) ClearMCPTools(c *gin.Context) {
 }
 
 func (h *KeyHandler) UpdateMCPTools(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1312,7 +1313,7 @@ type resourceWithStatusResponse struct {
 }
 
 func (h *KeyHandler) GetMCPResources(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1357,7 +1358,7 @@ func (h *KeyHandler) GetMCPResources(c *gin.Context) {
 }
 
 func (h *KeyHandler) AddMCPResource(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1400,7 +1401,7 @@ func (h *KeyHandler) AddMCPResource(c *gin.Context) {
 }
 
 func (h *KeyHandler) RemoveMCPResource(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1418,7 +1419,7 @@ func (h *KeyHandler) RemoveMCPResource(c *gin.Context) {
 }
 
 func (h *KeyHandler) ClearMCPResources(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1430,7 +1431,7 @@ func (h *KeyHandler) ClearMCPResources(c *gin.Context) {
 }
 
 func (h *KeyHandler) UpdateMCPResources(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1478,7 +1479,7 @@ type promptWithStatusResponse struct {
 }
 
 func (h *KeyHandler) GetMCPPrompts(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
@@ -1521,7 +1522,7 @@ func (h *KeyHandler) GetMCPPrompts(c *gin.Context) {
 }
 
 func (h *KeyHandler) AddMCPPrompt(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1564,7 +1565,7 @@ func (h *KeyHandler) AddMCPPrompt(c *gin.Context) {
 }
 
 func (h *KeyHandler) RemoveMCPPrompt(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1582,7 +1583,7 @@ func (h *KeyHandler) RemoveMCPPrompt(c *gin.Context) {
 }
 
 func (h *KeyHandler) ClearMCPPrompts(c *gin.Context) {
-	keyID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	keyID, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
 		return
@@ -1594,7 +1595,7 @@ func (h *KeyHandler) ClearMCPPrompts(c *gin.Context) {
 }
 
 func (h *KeyHandler) UpdateMCPPrompts(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := middleware.GetID(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
