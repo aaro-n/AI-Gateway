@@ -445,7 +445,7 @@ watch(() => route.params.id, () => {
 
 watch(activeTab, (newTab) => {
   if (newTab === 'providers' && providerModels.value.length === 0) fetchProviderModels()
-  if (newTab === 'models' && models.value.length === 0) fetchModels()
+  if (newTab === 'models' && models.value.length === 0) fetchModelTab()
   if (newTab === 'tools' && tools.value.length === 0) fetchTools()
   if (newTab === 'resources' && resources.value.length === 0) fetchResources()
   if (newTab === 'prompts' && prompts.value.length === 0) fetchPrompts()
@@ -467,11 +467,12 @@ async function fetchKey() {
   }
 }
 
-async function fetchModels() {
+async function fetchModelTab() {
   modelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/models`)
-    models.value = res.data.models || []
+    // 只显示 selected=true (已在白名单的模型)
+    models.value = (res.data.models || []).filter((m: any) => m.selected)
   } finally {
     modelsLoading.value = false
   }
@@ -775,7 +776,7 @@ async function addSelectedModels() {
     if (successCount > 0) ElMessage.success(`成功添加 ${successCount} 个模型`)
     if (errorMsg) ElMessage.error(errorMsg)
     modelDialogVisible.value = false
-    await fetchModels()
+    await fetchModelTab()
   } finally {
     addingModels.value = false
   }
