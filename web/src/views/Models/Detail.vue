@@ -132,7 +132,7 @@
             <div v-for="(result, idx) in mapping.protocol_tests" :key="idx" class="test-protocol-item">
               <div class="test-protocol-header">
                 <el-tag :type="result.success ? 'success' : 'danger'" size="small">
-                  {{ result.protocol.toUpperCase() }}
+                  {{ getProtocolLabel(result.protocol) }}
                 </el-tag>
                 <span class="test-protocol-status">
                   {{ result.success ? t('common.success') : t('common.error') }}
@@ -166,6 +166,18 @@ import api from '@/api'
 import { formatContextDisplay } from '@/utils/format'
 
 const { t } = useI18n()
+
+function getProtocolLabel(protocol: string) {
+  const labels: Record<string, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    gemini: 'Google Gemini',
+    deepseek: 'DeepSeek',
+    openrouter: 'OpenRouter',
+  }
+  return labels[protocol] || protocol.toUpperCase()
+}
+
 const route = useRoute()
 const router = useRouter()
 

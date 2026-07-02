@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 	protocolsPkg "ai-gateway/internal/protocols"
 )
 
@@ -49,13 +49,14 @@ type customModelTestRequest struct {
 }
 
 type testProviderModelRequest struct {
-	ProviderID       uint   `json:"provider_id"`
-	OpenAIBaseURL    string `json:"openai_base_url"`
-	AnthropicBaseURL string `json:"anthropic_base_url"`
-	GeminiBaseURL    string `json:"gemini_base_url"`
-	DeepSeekBaseURL  string `json:"deepseek_base_url"`
-	APIKey           string `json:"api_key"`
-	ModelID          string `json:"model_id" binding:"required"`
+	ProviderID        uint   `json:"provider_id"`
+	OpenAIBaseURL     string `json:"openai_base_url"`
+	AnthropicBaseURL  string `json:"anthropic_base_url"`
+	GeminiBaseURL     string `json:"gemini_base_url"`
+	DeepSeekBaseURL   string `json:"deepseek_base_url"`
+	OpenRouterBaseURL string `json:"openrouter_base_url"`
+	APIKey            string `json:"api_key"`
+	ModelID           string `json:"model_id" binding:"required"`
 }
 
 type customModelTestResponse struct {
@@ -162,11 +163,12 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 
 	p := &model.Provider{
-		OpenAIBaseURL:    strings.TrimSuffix(req.OpenAIBaseURL, "/"),
-		AnthropicBaseURL: strings.TrimSuffix(req.AnthropicBaseURL, "/"),
-		GeminiBaseURL:    strings.TrimSuffix(req.GeminiBaseURL, "/"),
-		DeepSeekBaseURL:  strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
-		APIKey:           req.APIKey,
+		OpenAIBaseURL:     strings.TrimSuffix(req.OpenAIBaseURL, "/"),
+		AnthropicBaseURL:  strings.TrimSuffix(req.AnthropicBaseURL, "/"),
+		GeminiBaseURL:     strings.TrimSuffix(req.GeminiBaseURL, "/"),
+		DeepSeekBaseURL:   strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
+		OpenRouterBaseURL: strings.TrimSuffix(req.OpenRouterBaseURL, "/"),
+		APIKey:            req.APIKey,
 	}
 
 	if req.OpenAIBaseURL == "" && req.AnthropicBaseURL == "" && req.GeminiBaseURL == "" && req.APIKey == "DUMMY_KEY_FOR_EDIT" {
@@ -179,18 +181,44 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	// Let's check testProviderModelRequest below.
 	// For maximum robustness, if APIKey is "DUMMY_KEY_FOR_EDIT" or empty, and we can find a matching provider by BaseURLs, let's load the saved APIKey.
 	if req.APIKey == "DUMMY_KEY_FOR_EDIT" || req.APIKey == "" {
-		var existing model.Provider
-		if req.OpenAIBaseURL != "" {
-			model.DB.Where("openai_base_url = ?", p.OpenAIBaseURL).First(&existing)
-		} else if req.AnthropicBaseURL != "" {
-			model.DB.Where("anthropic_base_url = ?", p.AnthropicBaseURL).First(&existing)
-		} else if req.GeminiBaseURL != "" {
-			model.DB.Where("gemini_base_url = ?", p.GeminiBaseURL).First(&existing)
-		} else if req.DeepSeekBaseURL != "" {
-			model.DB.Where("deepseek_base_url = ?", p.DeepSeekBaseURL).First(&existing)
-		}
-		if existing.ID > 0 {
-			p.APIKey = existing.APIKey
+		// 优先通过 provider_id 直接加载
+		if req.ProviderID > 0 {
+			var existing model.Provider
+			if err := model.DB.First(&existing, req.ProviderID).Error; err == nil && existing.APIKey != "" {
+				p.APIKey = existing.APIKey
+				// 也补齐可能缺失的 BaseURL
+				if p.OpenAIBaseURL == "" {
+					p.OpenAIBaseURL = existing.OpenAIBaseURL
+				}
+				if p.AnthropicBaseURL == "" {
+					p.AnthropicBaseURL = existing.AnthropicBaseURL
+				}
+				if p.GeminiBaseURL == "" {
+					p.GeminiBaseURL = existing.GeminiBaseURL
+				}
+				if p.DeepSeekBaseURL == "" {
+					p.DeepSeekBaseURL = existing.DeepSeekBaseURL
+				}
+				if p.OpenRouterBaseURL == "" {
+					p.OpenRouterBaseURL = existing.OpenRouterBaseURL
+				}
+			}
+		} else {
+			var existing model.Provider
+			if req.OpenAIBaseURL != "" {
+				model.DB.Where("openai_base_url = ?", p.OpenAIBaseURL).First(&existing)
+			} else if req.AnthropicBaseURL != "" {
+				model.DB.Where("anthropic_base_url = ?", p.AnthropicBaseURL).First(&existing)
+			} else if req.GeminiBaseURL != "" {
+				model.DB.Where("gemini_base_url = ?", p.GeminiBaseURL).First(&existing)
+			} else if req.DeepSeekBaseURL != "" {
+				model.DB.Where("deepseek_base_url = ?", p.DeepSeekBaseURL).First(&existing)
+			} else if req.OpenRouterBaseURL != "" {
+				model.DB.Where("openrouter_base_url = ?", p.OpenRouterBaseURL).First(&existing)
+			}
+			if existing.ID > 0 {
+				p.APIKey = existing.APIKey
+			}
 		}
 	}
 
@@ -199,7 +227,7 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult, geminiResult, deepseekResult *protocolTestResult
+	var openAIResult, anthropicResult, geminiResult, deepseekResult, openrouterResult *protocolTestResult
 
 	if p.OpenAIBaseURL != "" {
 		wg.Add(1)
@@ -237,6 +265,15 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 		}()
 	}
 
+	if p.OpenRouterBaseURL != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := executeTest(p, pm, "openrouter")
+			openrouterResult = &result
+		}()
+	}
+
 	wg.Wait()
 
 	tests := []protocolTestResult{}
@@ -251,6 +288,9 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 	if deepseekResult != nil {
 		tests = append(tests, *deepseekResult)
+	}
+	if openrouterResult != nil {
+		tests = append(tests, *openrouterResult)
 	}
 
 	// 保存测试结果（ProviderID 可能为 0，表示未保存的 provider）
@@ -476,6 +516,7 @@ func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) pr
 		p.AnthropicBaseURL,
 		p.GeminiBaseURL,
 		p.DeepSeekBaseURL,
+		p.OpenRouterBaseURL,
 		p.APIKey,
 		pm.ModelID,
 	)

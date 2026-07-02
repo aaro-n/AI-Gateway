@@ -27,6 +27,7 @@ import (
 	_ "ai-gateway/internal/protocols/deepseek"
 	_ "ai-gateway/internal/protocols/gemini"
 	_ "ai-gateway/internal/protocols/openai"
+	_ "ai-gateway/internal/protocols/openrouter"
 )
 
 func main() {
@@ -150,6 +151,8 @@ func main() {
 			protected.PUT("/providers/:id/models/:mid", providerModelHandler.Update)
 			protected.DELETE("/providers/:id/models/:mid", providerModelHandler.Delete)
 			protected.POST("/providers/:id/sync", providerModelHandler.Sync)
+			protected.POST("/providers/:id/models/lookup", providerModelHandler.Lookup)
+			protected.POST("/providers/models/lookup-batch", providerModelHandler.LookupBatch)
 			protected.POST("/providers/:id/models/:mid/test", modelTestHandler.TestProviderModel)
 			protected.GET("/providers/:id/test-results", modelTestHandler.GetTestResults)
 

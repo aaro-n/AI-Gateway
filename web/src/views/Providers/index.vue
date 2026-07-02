@@ -18,8 +18,9 @@
             <el-tag v-if="row.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
             <el-tag v-if="row.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
             <el-tag v-if="row.gemini_base_url" type="warning" style="margin-right: 4px">Gemini</el-tag>
-            <el-tag v-if="row.deepseek_base_url" type="danger">DeepSeek</el-tag>
-            <span v-if="!row.openai_base_url && !row.anthropic_base_url && !row.gemini_base_url && !row.deepseek_base_url">-</span>
+            <el-tag v-if="row.deepseek_base_url" type="danger" style="margin-right: 4px">DeepSeek</el-tag>
+            <el-tag v-if="row.openrouter_base_url" type="info" style="margin-right: 4px">OpenRouter</el-tag>
+            <span v-if="!row.openai_base_url && !row.anthropic_base_url && !row.gemini_base_url && !row.deepseek_base_url && !row.openrouter_base_url">-</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('provider.models')" width="120" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
@@ -51,7 +52,7 @@
             <el-option
               v-for="item in protocolMeta"
               :key="item.name"
-              :label="item.name === 'openai' ? 'OpenAI' : item.name === 'anthropic' ? 'Anthropic' : item.name === 'gemini' ? 'Google Gemini' : item.name === 'deepseek' ? 'DeepSeek' : item.name.toUpperCase()"
+              :label="item.name === 'openai' ? 'OpenAI' : item.name === 'anthropic' ? 'Anthropic' : item.name === 'gemini' ? 'Google Gemini' : item.name === 'deepseek' ? 'DeepSeek' : item.name === 'openrouter' ? 'OpenRouter' : item.name.toUpperCase()"
               :value="item.name"
             />
           </el-select>
@@ -84,7 +85,7 @@
           <div class="models-section-header">
             <span class="models-section-title">渠道模型配置</span>
             <div class="models-section-actions">
-              <el-button type="primary" size="small" @click="handleFetchProviderModels" :loading="testingConnection">获取厂商模型列表</el-button>
+              <el-button type="primary" size="small" @click="handleFetchProviderModels" :loading="testingConnection">{{ form.provider_type === 'openrouter' ? '获取模型信息' : '获取厂商模型列表' }}</el-button>
               <el-button type="success" size="small" @click="testAllFetchedModels" :loading="testingAllModels" :disabled="fetchedModels.length === 0">测试全部</el-button>
               <el-button type="danger" size="small" plain @click="removeFailedModels" :disabled="!hasFailedModels">删除未通过</el-button>
             </div>
@@ -161,6 +162,7 @@ const form = reactive({
   anthropic_base_url: '',
   gemini_base_url: '',
   deepseek_base_url: '',
+  openrouter_base_url: '',
   base_url: '', // Unified BaseURL input shown to user, mapped dynamically
   api_key: '',
   provider_type: ''
@@ -227,6 +229,8 @@ function mapBaseUrls() {
     form.gemini_base_url = form.base_url
   } else if (form.provider_type === 'deepseek') {
     form.deepseek_base_url = form.base_url
+  } else if (form.provider_type === 'openrouter') {
+    form.openrouter_base_url = form.base_url
   }
 }
 
@@ -296,6 +300,7 @@ async function testSingleFetchedModel(model: any) {
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
       deepseek_base_url: form.deepseek_base_url,
+      openrouter_base_url: form.openrouter_base_url,
       api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
@@ -360,6 +365,7 @@ async function testSingleFetchedModelAsync(model: any, idx: number) {
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
       deepseek_base_url: form.deepseek_base_url,
+      openrouter_base_url: form.openrouter_base_url,
       api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
@@ -384,6 +390,55 @@ async function handleFetchProviderModels() {
     ElMessage.error('API Key is required to fetch models')
     return
   }
+
+  // OpenRouter: 获取已手动添加模型的上下文、能力等信息
+  if (form.provider_type === 'openrouter') {
+    const manualModels = fetchedModels.value.filter(m => m.source === 'manual' || !m.source)
+    if (manualModels.length === 0) {
+      ElMessage.warning('请先在下方"输入 Model ID 手动添加"中添加模型，然后点击"获取模型信息"查询详情')
+      return
+    }
+    testingConnection.value = true
+    try {
+      const ids = manualModels.map(m => m.model_id)
+      const res = await api.post('/providers/models/lookup-batch', {
+        base_url: form.base_url,
+        api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
+        model_ids: ids
+      })
+      const models = res.data.models || []
+      const errors = res.data.errors || []
+
+      // 更新已有模型的信息
+      for (const info of models) {
+        const existing = fetchedModels.value.find(m => m.model_id === info.model_id)
+        if (existing) {
+          existing.display_name = info.display_name || existing.display_name
+          existing.owned_by = info.owned_by || existing.owned_by
+          existing.context_window = info.context_window || existing.context_window
+          existing.max_output = info.max_output || existing.max_output
+          existing.input_price = info.input_price !== undefined ? info.input_price : existing.input_price
+          existing.output_price = info.output_price !== undefined ? info.output_price : existing.output_price
+          existing.supports_vision = info.supports_vision !== undefined ? info.supports_vision : existing.supports_vision
+          existing.supports_tools = info.supports_tools !== undefined ? info.supports_tools : existing.supports_tools
+          existing.supports_stream = info.supports_stream !== undefined ? info.supports_stream : existing.supports_stream
+        }
+      }
+
+      if (errors.length > 0) {
+        ElMessage.warning(`成功获取 ${models.length} 个模型信息，${errors.length} 个查询失败：${errors.map((e: any) => e.model_id).join(', ')}`)
+      } else {
+        ElMessage.success(`成功获取 ${models.length} 个模型的详细信息（上下文窗口、能力、价格等）`)
+      }
+    } catch (e: any) {
+      ElMessage.error(e.response?.data?.error || '获取模型信息失败')
+    } finally {
+      testingConnection.value = false
+    }
+    return
+  }
+
+  // 默认：从上游 API 同步模型列表
   testingConnection.value = true
   try {
     const res = await api.post('/providers/test-connection', {
@@ -445,6 +500,7 @@ async function handleTestConnection() {
       anthropic_base_url: form.anthropic_base_url,
       gemini_base_url: form.gemini_base_url,
       deepseek_base_url: form.deepseek_base_url,
+      openrouter_base_url: form.openrouter_base_url,
       api_key: form.api_key
     })
     ElMessage.success('连接测试成功！厂商端点及 API Key 校验通过，可以配置和测试模型。')
@@ -476,7 +532,7 @@ async function showDialog(id?: number) {
   selectedPreset.value = ''
   fetchedModels.value = []
   pendingDeleteIds.value = []
-  Object.assign(form, { name: '', openai_base_url: '', anthropic_base_url: '', gemini_base_url: '', deepseek_base_url: '', base_url: '', api_key: '', provider_type: '' })
+  Object.assign(form, { name: '', openai_base_url: '', anthropic_base_url: '', gemini_base_url: '', deepseek_base_url: '', openrouter_base_url: '', base_url: '', api_key: '', provider_type: '' })
   dialogVisible.value = true
   
   if (id) {
@@ -485,14 +541,15 @@ async function showDialog(id?: number) {
       const res = await api.get(`/providers/${id}`)
       const provider = res.data.provider
       if (provider) {
-        const type = provider.openai_base_url ? 'openai' : (provider.anthropic_base_url ? 'anthropic' : (provider.gemini_base_url ? 'gemini' : (provider.deepseek_base_url ? 'deepseek' : '')))
-        const bUrl = provider.openai_base_url || provider.anthropic_base_url || provider.gemini_base_url || provider.deepseek_base_url || ''
+        const type = provider.openai_base_url ? 'openai' : (provider.anthropic_base_url ? 'anthropic' : (provider.gemini_base_url ? 'gemini' : (provider.deepseek_base_url ? 'deepseek' : (provider.openrouter_base_url ? 'openrouter' : ''))))
+        const bUrl = provider.openai_base_url || provider.anthropic_base_url || provider.gemini_base_url || provider.deepseek_base_url || provider.openrouter_base_url || ''
         Object.assign(form, {
           name: provider.name || '',
           openai_base_url: provider.openai_base_url || '',
           anthropic_base_url: provider.anthropic_base_url || '',
           gemini_base_url: provider.gemini_base_url || '',
           deepseek_base_url: provider.deepseek_base_url || '',
+          openrouter_base_url: provider.openrouter_base_url || '',
           base_url: bUrl,
           api_key: '',
           provider_type: type
@@ -503,6 +560,15 @@ async function showDialog(id?: number) {
         fetchedModels.value = models.map((m: any) => ({
           id: m.id,
           model_id: m.model_id,
+          display_name: m.display_name || m.model_id,
+          owned_by: m.owned_by || '',
+          context_window: m.context_window || 4096,
+          max_output: m.max_output || 1024,
+          input_price: m.input_price || 0,
+          output_price: m.output_price || 0,
+          supports_vision: m.supports_vision !== false,
+          supports_tools: m.supports_tools !== false,
+          supports_stream: m.supports_stream !== false,
           testStatus: m.is_available ? 'success' : 'untested',
           latency: 0,
           error: '',
@@ -571,6 +637,7 @@ async function handleSubmit() {
 
     // 保存模型中新增的（_exists 标记为 false 或未标记 = 对话框里新加的）
     const newModels = fetchedModels.value.filter(m => !m._exists)
+    const existingModels = fetchedModels.value.filter(m => m._exists && m.source === 'manual')
     const failedModels: string[] = []
     if (newModels.length > 0 && providerId) {
       for (const m of newModels) {
@@ -581,6 +648,8 @@ async function handleSubmit() {
             owned_by: m.owned_by || form.provider_type,
             context_window: m.context_window !== undefined ? m.context_window : 4096,
             max_output: m.max_output !== undefined ? m.max_output : 1024,
+            input_price: m.input_price !== undefined ? m.input_price : 0,
+            output_price: m.output_price !== undefined ? m.output_price : 0,
             supports_vision: m.supports_vision !== false,
             supports_tools: m.supports_tools !== false,
             supports_stream: m.supports_stream !== false,
@@ -588,6 +657,28 @@ async function handleSubmit() {
           })
         } catch (err: any) {
           failedModels.push(m.model_id)
+        }
+      }
+    }
+
+    // 更新已存在的 manual 模型（"获取模型信息"查到的上下文/价格等需要持久化）
+    if (existingModels.length > 0 && providerId) {
+      for (const m of existingModels) {
+        try {
+          await api.put(`/providers/${providerId}/models/${m.id}`, {
+            model_id: m.model_id,
+            display_name: m.display_name || m.model_id,
+            owned_by: m.owned_by || form.provider_type,
+            context_window: m.context_window !== undefined ? m.context_window : 4096,
+            max_output: m.max_output !== undefined ? m.max_output : 1024,
+            input_price: m.input_price !== undefined ? m.input_price : 0,
+            output_price: m.output_price !== undefined ? m.output_price : 0,
+            supports_vision: m.supports_vision !== false,
+            supports_tools: m.supports_tools !== false,
+            supports_stream: m.supports_stream !== false
+          })
+        } catch (err: any) {
+          // 更新失败不阻塞
         }
       }
     }

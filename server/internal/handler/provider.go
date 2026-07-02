@@ -11,45 +11,49 @@ import (
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
 	protocolsPkg "ai-gateway/internal/protocols"
+	"ai-gateway/internal/protocols/openrouter"
 	"ai-gateway/internal/router"
 )
 
 type ProviderHandler struct{}
 
 type createProviderRequest struct {
-	Name             string `json:"name" binding:"required"`
-	OpenAIBaseURL    string `json:"openai_base_url"`
-	AnthropicBaseURL string `json:"anthropic_base_url"`
-	GeminiBaseURL    string `json:"gemini_base_url"`
-	DeepSeekBaseURL  string `json:"deepseek_base_url"`
-	APIKey           string `json:"api_key" binding:"required"`
-	Priority         int    `json:"priority"`
+	Name              string `json:"name" binding:"required"`
+	OpenAIBaseURL     string `json:"openai_base_url"`
+	AnthropicBaseURL  string `json:"anthropic_base_url"`
+	GeminiBaseURL     string `json:"gemini_base_url"`
+	DeepSeekBaseURL   string `json:"deepseek_base_url"`
+	OpenRouterBaseURL string `json:"openrouter_base_url"`
+	APIKey            string `json:"api_key" binding:"required"`
+	Priority          int    `json:"priority"`
 }
 
 type updateProviderRequest struct {
-	Name             string  `json:"name"`
-	OpenAIBaseURL    *string `json:"openai_base_url"`
-	AnthropicBaseURL *string `json:"anthropic_base_url"`
-	GeminiBaseURL    *string `json:"gemini_base_url"`
-	DeepSeekBaseURL  *string `json:"deepseek_base_url"`
-	APIKey           string  `json:"api_key"`
-	Enabled          *bool   `json:"enabled"`
-	Priority         *int    `json:"priority"`
+	Name              string  `json:"name"`
+	OpenAIBaseURL     *string `json:"openai_base_url"`
+	AnthropicBaseURL  *string `json:"anthropic_base_url"`
+	GeminiBaseURL     *string `json:"gemini_base_url"`
+	DeepSeekBaseURL   *string `json:"deepseek_base_url"`
+	OpenRouterBaseURL *string `json:"openrouter_base_url"`
+	APIKey            string  `json:"api_key"`
+	Enabled           *bool   `json:"enabled"`
+	Priority          *int    `json:"priority"`
 }
 
 type providerResponse struct {
-	ID               uint                    `json:"id"`
-	Slug             string                  `json:"slug"`
-	Name             string                  `json:"name"`
-	OpenAIBaseURL    string                  `json:"openai_base_url"`
-	AnthropicBaseURL string                  `json:"anthropic_base_url"`
-	GeminiBaseURL    string                  `json:"gemini_base_url"`
-	DeepSeekBaseURL  string                  `json:"deepseek_base_url"`
-	APIKeyMasked     string                  `json:"api_key_masked"`
-	Enabled          bool                    `json:"enabled"`
-	Priority         int                     `json:"priority"`
-	Models           []providerModelResponse `json:"models,omitempty"`
-	CreatedAt        string                  `json:"created_at"`
+	ID                uint                    `json:"id"`
+	Slug              string                  `json:"slug"`
+	Name              string                  `json:"name"`
+	OpenAIBaseURL     string                  `json:"openai_base_url"`
+	AnthropicBaseURL  string                  `json:"anthropic_base_url"`
+	GeminiBaseURL     string                  `json:"gemini_base_url"`
+	DeepSeekBaseURL   string                  `json:"deepseek_base_url"`
+	OpenRouterBaseURL string                  `json:"openrouter_base_url"`
+	APIKeyMasked      string                  `json:"api_key_masked"`
+	Enabled           bool                    `json:"enabled"`
+	Priority          int                     `json:"priority"`
+	Models            []providerModelResponse `json:"models,omitempty"`
+	CreatedAt         string                  `json:"created_at"`
 }
 
 func NewProviderHandler() *ProviderHandler {
@@ -71,18 +75,19 @@ func (h *ProviderHandler) List(c *gin.Context) {
 		}
 
 		result[i] = providerResponse{
-			ID:               p.ID,
-			Slug:             p.Slug,
-			Name:             p.Name,
-			OpenAIBaseURL:    p.OpenAIBaseURL,
-			AnthropicBaseURL: p.AnthropicBaseURL,
-			GeminiBaseURL:    p.GeminiBaseURL,
-			DeepSeekBaseURL:  p.DeepSeekBaseURL,
-			APIKeyMasked:     maskAPIKey(p.APIKey),
-			Enabled:          p.Enabled,
-			Priority:         p.Priority,
-			Models:           models,
-			CreatedAt:        p.CreatedAt.Format("2006-01-02 15:04:05"),
+			ID:                p.ID,
+			Slug:              p.Slug,
+			Name:              p.Name,
+			OpenAIBaseURL:     p.OpenAIBaseURL,
+			AnthropicBaseURL:  p.AnthropicBaseURL,
+			GeminiBaseURL:     p.GeminiBaseURL,
+			DeepSeekBaseURL:   p.DeepSeekBaseURL,
+			OpenRouterBaseURL: p.OpenRouterBaseURL,
+			APIKeyMasked:      maskAPIKey(p.APIKey),
+			Enabled:           p.Enabled,
+			Priority:          p.Priority,
+			Models:            models,
+			CreatedAt:         p.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
 
@@ -108,18 +113,19 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
-		ID:               provider.ID,
-		Slug:      provider.Slug,
-		Name:             provider.Name,
-		OpenAIBaseURL:    provider.OpenAIBaseURL,
-		AnthropicBaseURL: provider.AnthropicBaseURL,
-		GeminiBaseURL:    provider.GeminiBaseURL,
-		DeepSeekBaseURL:  provider.DeepSeekBaseURL,
-		APIKeyMasked:     maskAPIKey(provider.APIKey),
-		Enabled:          provider.Enabled,
-		Priority:         provider.Priority,
-		Models:           models,
-		CreatedAt:        provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		ID:                provider.ID,
+		Slug:              provider.Slug,
+		Name:              provider.Name,
+		OpenAIBaseURL:     provider.OpenAIBaseURL,
+		AnthropicBaseURL:  provider.AnthropicBaseURL,
+		GeminiBaseURL:     provider.GeminiBaseURL,
+		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
+		OpenRouterBaseURL: provider.OpenRouterBaseURL,
+		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Enabled:           provider.Enabled,
+		Priority:          provider.Priority,
+		Models:            models,
+		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -131,17 +137,18 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 	}
 
 	provider := model.Provider{
-		Name:             req.Name,
-		OpenAIBaseURL:    strings.TrimSuffix(req.OpenAIBaseURL, "/"),
-		AnthropicBaseURL: strings.TrimSuffix(req.AnthropicBaseURL, "/"),
-		GeminiBaseURL:    strings.TrimSuffix(req.GeminiBaseURL, "/"),
-		DeepSeekBaseURL:  strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
-		APIKey:           req.APIKey,
-		Enabled:          true,
-		Priority:         req.Priority,
+		Name:              req.Name,
+		OpenAIBaseURL:     strings.TrimSuffix(req.OpenAIBaseURL, "/"),
+		AnthropicBaseURL:  strings.TrimSuffix(req.AnthropicBaseURL, "/"),
+		GeminiBaseURL:     strings.TrimSuffix(req.GeminiBaseURL, "/"),
+		DeepSeekBaseURL:   strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
+		OpenRouterBaseURL: strings.TrimSuffix(req.OpenRouterBaseURL, "/"),
+		APIKey:            req.APIKey,
+		Enabled:           true,
+		Priority:          req.Priority,
 	}
 
-	if provider.OpenAIBaseURL == "" && provider.AnthropicBaseURL == "" && provider.GeminiBaseURL == "" && provider.DeepSeekBaseURL == "" {
+	if provider.OpenAIBaseURL == "" && provider.AnthropicBaseURL == "" && provider.GeminiBaseURL == "" && provider.DeepSeekBaseURL == "" && provider.OpenRouterBaseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
 		return
 	}
@@ -152,17 +159,18 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"provider": providerResponse{
-		ID:               provider.ID,
-		Slug:      provider.Slug,
-		Name:             provider.Name,
-		OpenAIBaseURL:    provider.OpenAIBaseURL,
-		AnthropicBaseURL: provider.AnthropicBaseURL,
-		GeminiBaseURL:    provider.GeminiBaseURL,
-		DeepSeekBaseURL:  provider.DeepSeekBaseURL,
-		APIKeyMasked:     maskAPIKey(provider.APIKey),
-		Enabled:          provider.Enabled,
-		Priority:         provider.Priority,
-		CreatedAt:        provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		ID:                provider.ID,
+		Slug:              provider.Slug,
+		Name:              provider.Name,
+		OpenAIBaseURL:     provider.OpenAIBaseURL,
+		AnthropicBaseURL:  provider.AnthropicBaseURL,
+		GeminiBaseURL:     provider.GeminiBaseURL,
+		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
+		OpenRouterBaseURL: provider.OpenRouterBaseURL,
+		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Enabled:           provider.Enabled,
+		Priority:          provider.Priority,
+		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -203,6 +211,9 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if req.DeepSeekBaseURL != nil {
 		updates["deepseek_base_url"] = strings.TrimSuffix(*req.DeepSeekBaseURL, "/")
 	}
+	if req.OpenRouterBaseURL != nil {
+		updates["openrouter_base_url"] = strings.TrimSuffix(*req.OpenRouterBaseURL, "/")
+	}
 
 	if req.APIKey != "" {
 		updates["api_key"] = req.APIKey
@@ -214,7 +225,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		updates["priority"] = *req.Priority
 	}
 
-	if req.OpenAIBaseURL != nil || req.AnthropicBaseURL != nil || req.GeminiBaseURL != nil || req.DeepSeekBaseURL != nil || req.APIKey != "" || req.Enabled != nil {
+	if req.OpenAIBaseURL != nil || req.AnthropicBaseURL != nil || req.GeminiBaseURL != nil || req.DeepSeekBaseURL != nil || req.OpenRouterBaseURL != nil || req.APIKey != "" || req.Enabled != nil {
 		router.ClearAllCooldownsForProvider(provider.ID)
 	}
 
@@ -223,6 +234,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	newAnthropicBaseURL := provider.AnthropicBaseURL
 	newGeminiBaseURL := provider.GeminiBaseURL
 	newDeepSeekBaseURL := provider.DeepSeekBaseURL
+	newOpenRouterBaseURL := provider.OpenRouterBaseURL
 	if openaiURL, ok := updates["openai_base_url"].(string); ok {
 		newOpenAIBaseURL = openaiURL
 	}
@@ -235,7 +247,10 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if deepseekURL, ok := updates["deepseek_base_url"].(string); ok {
 		newDeepSeekBaseURL = deepseekURL
 	}
-	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" && newGeminiBaseURL == "" && newDeepSeekBaseURL == "" {
+	if openrouterURL, ok := updates["openrouter_base_url"].(string); ok {
+		newOpenRouterBaseURL = openrouterURL
+	}
+	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" && newGeminiBaseURL == "" && newDeepSeekBaseURL == "" && newOpenRouterBaseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
 		return
 	}
@@ -253,18 +268,19 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
-		ID:               provider.ID,
-		Slug:      provider.Slug,
-		Name:             provider.Name,
-		OpenAIBaseURL:    provider.OpenAIBaseURL,
-		AnthropicBaseURL: provider.AnthropicBaseURL,
-		GeminiBaseURL:    provider.GeminiBaseURL,
-		DeepSeekBaseURL:  provider.DeepSeekBaseURL,
-		APIKeyMasked:     maskAPIKey(provider.APIKey),
-		Enabled:          provider.Enabled,
-		Priority:         provider.Priority,
-		Models:           models,
-		CreatedAt:        provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		ID:                provider.ID,
+		Slug:              provider.Slug,
+		Name:              provider.Name,
+		OpenAIBaseURL:     provider.OpenAIBaseURL,
+		AnthropicBaseURL:  provider.AnthropicBaseURL,
+		GeminiBaseURL:     provider.GeminiBaseURL,
+		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
+		OpenRouterBaseURL: provider.OpenRouterBaseURL,
+		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Enabled:           provider.Enabled,
+		Priority:          provider.Priority,
+		Models:            models,
+		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -306,11 +322,12 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 }
 
 type testConnectionRequest struct {
-	OpenAIBaseURL    string `json:"openai_base_url"`
-	AnthropicBaseURL string `json:"anthropic_base_url"`
-	GeminiBaseURL    string `json:"gemini_base_url"`
-	DeepSeekBaseURL  string `json:"deepseek_base_url"`
-	APIKey           string `json:"api_key"`
+	OpenAIBaseURL     string `json:"openai_base_url"`
+	AnthropicBaseURL  string `json:"anthropic_base_url"`
+	GeminiBaseURL     string `json:"gemini_base_url"`
+	DeepSeekBaseURL   string `json:"deepseek_base_url"`
+	OpenRouterBaseURL string `json:"openrouter_base_url"`
+	APIKey            string `json:"api_key"`
 }
 
 func (h *ProviderHandler) TestConnection(c *gin.Context) {
@@ -324,6 +341,7 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 	anthropicURL := strings.TrimSuffix(req.AnthropicBaseURL, "/")
 	geminiURL := strings.TrimSuffix(req.GeminiBaseURL, "/")
 	deepseekURL := strings.TrimSuffix(req.DeepSeekBaseURL, "/")
+	openrouterURL := strings.TrimSuffix(req.OpenRouterBaseURL, "/")
 	apiKey := req.APIKey
 
 	if apiKey == "DUMMY_KEY_FOR_EDIT" || apiKey == "" {
@@ -336,10 +354,23 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 			model.DB.Where("gemini_base_url = ?", geminiURL).First(&existing)
 		} else if deepseekURL != "" {
 			model.DB.Where("deepseek_base_url = ?", deepseekURL).First(&existing)
+		} else if openrouterURL != "" {
+			model.DB.Where("openrouter_base_url = ?", openrouterURL).First(&existing)
 		}
 		if existing.ID > 0 {
 			apiKey = existing.APIKey
 		}
+	}
+
+	// OpenRouter 不支持批量同步，单独处理连接测试
+	if openrouterURL != "" && openaiURL == "" && anthropicURL == "" && geminiURL == "" && deepseekURL == "" {
+		_, err := openrouter.LookupModelStatic(openrouterURL, apiKey, "openai/gpt-3.5-turbo")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"models": []interface{}{}, "total": 0, "note": "OpenRouter connection successful. Use model lookup to fetch individual model details."})
+		return
 	}
 
 	models, err := protocolsPkg.AutoSyncModels(0, openaiURL, anthropicURL, geminiURL, deepseekURL, apiKey)

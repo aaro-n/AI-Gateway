@@ -642,6 +642,8 @@ func keyFormatToProtocol(format string) string {
 		return "gemini"
 	case "deepseek":
 		return "deepseek"
+	case "openrouter":
+		return "openrouter"
 	default:
 		return ""
 	}
@@ -670,10 +672,11 @@ func (h *KeyHandler) ListProviders(c *gin.Context) {
 	// 获取该协议下所有启用的 Provider
 	var providers []model.Provider
 	fieldMap := map[string]string{
-		"openai":    "openai_base_url != ''",
-		"anthropic": "anthropic_base_url != ''",
-		"gemini":    "gemini_base_url != ''",
-		"deepseek":  "deepseek_base_url != ''",
+		"openai":     "openai_base_url != ''",
+		"anthropic":  "anthropic_base_url != ''",
+		"gemini":     "gemini_base_url != ''",
+		"deepseek":   "deepseek_base_url != ''",
+		"openrouter": "openrouter_base_url != ''",
 	}
 	if cond, ok := fieldMap[protocol]; ok {
 		model.DB.Where("enabled = ?", true).Where(cond).Find(&providers)
@@ -823,10 +826,11 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 
 	// 按协议过滤：只获取匹配协议的 provider_models
 	fieldMap := map[string]string{
-		"openai":    "providers.openai_base_url != ''",
-		"anthropic": "providers.anthropic_base_url != ''",
-		"gemini":    "providers.gemini_base_url != ''",
-		"deepseek":  "providers.deepseek_base_url != ''",
+		"openai":     "providers.openai_base_url != ''",
+		"anthropic":  "providers.anthropic_base_url != ''",
+		"gemini":     "providers.gemini_base_url != ''",
+		"deepseek":   "providers.deepseek_base_url != ''",
+		"openrouter": "providers.openrouter_base_url != ''",
 	}
 
 	var pms []model.ProviderModel

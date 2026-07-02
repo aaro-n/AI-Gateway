@@ -217,6 +217,8 @@ async function handleUpdateKey(row: any) {
       format = 'gemini'
     } else if (row.key && row.key.startsWith('sk-ant-')) {
       format = 'anthropic'
+    } else if (row.key && row.key.startsWith('sk-or-')) {
+      format = 'openrouter'
     } else if (row.key && row.key.startsWith('sk-')) {
       format = 'openai'
     }
@@ -238,9 +240,16 @@ const providerLabels: Record<string, { label: string; type: string }> = {
   anthropic: { label: 'Anthropic', type: 'primary' },
   gemini: { label: 'Gemini', type: 'warning' },
   deepseek: { label: 'DeepSeek', type: 'danger' },
+  openrouter: { label: 'OpenRouter', type: '' },
 }
 
 function getKeyProviderLabel(row: any): string {
+  const rawKey = row.key || ''
+  if (rawKey.startsWith('sk-or-')) return 'OpenRouter'
+  if (rawKey.startsWith('sk-ant-')) return 'Anthropic'
+  if (rawKey.startsWith('AIza')) return 'Gemini'
+  if (rawKey.startsWith('sk-')) return 'OpenAI'
+  // fallback
   const fmtKeys = row.formats ? Object.keys(row.formats) : []
   const fmt = fmtKeys[0]
   if (!fmt) return ''
@@ -248,10 +257,12 @@ function getKeyProviderLabel(row: any): string {
 }
 
 function getKeyProviderType(row: any): string {
-  const fmtKeys = row.formats ? Object.keys(row.formats) : []
-  const fmt = fmtKeys[0]
-  if (!fmt) return 'info'
-  return providerLabels[fmt]?.type || 'info'
+  const rawKey = row.key || ''
+  if (rawKey.startsWith('sk-or-')) return 'info'
+  if (rawKey.startsWith('sk-ant-')) return 'primary'
+  if (rawKey.startsWith('AIza')) return 'warning'
+  if (rawKey.startsWith('sk-')) return 'success'
+  return 'info'
 }
 
 async function toggleEnabled(row: any) {

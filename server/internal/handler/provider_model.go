@@ -1,18 +1,21 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 	protocolsPkg "ai-gateway/internal/protocols"
+	"ai-gateway/internal/protocols/openrouter"
 )
 
 type ProviderModelHandler struct{}
@@ -368,5 +371,143 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 		"updated":     updated,
 		"deactivated": deactivatedCount,
 		"total":       len(models),
+	})
+}
+
+// LookupRequest 模型信息查询请求
+type LookupRequest struct {
+	ModelID string `json:"model_id" binding:"required"`
+}
+
+// Lookup 从上游 API 查询单个模型的详细信息（目前仅支持 OpenRouter 提供商）
+func (h *ProviderModelHandler) Lookup(c *gin.Context) {
+	providerID, err := middleware.GetID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		return
+	}
+
+	var provider model.Provider
+	if err := model.DB.First(&provider, providerID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+		return
+	}
+
+	var req LookupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.ModelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model_id is required"})
+		return
+	}
+
+	// 确定使用哪个 base URL 来查询
+	baseURL := provider.OpenRouterBaseURL
+	if baseURL == "" {
+		// 也检查 Endpoints JSON
+		if provider.Endpoints != "" {
+			var eps map[string]string
+			if json.Unmarshal([]byte(provider.Endpoints), &eps) == nil {
+				if url, ok := eps["openrouter"]; ok && url != "" {
+					baseURL = url
+				}
+			}
+		}
+	}
+
+	if baseURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Model lookup is only supported for providers with OpenRouter configured. Please configure an OpenRouter endpoint for this provider."})
+		return
+	}
+
+	apiKey := provider.APIKey
+
+	info, err := openrouter.LookupModelStatic(baseURL, apiKey, req.ModelID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to look up model: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"model": providerModelResponse{
+			ModelID:        info.ModelID,
+			DisplayName:    info.DisplayName,
+			OwnedBy:        info.OwnedBy,
+			ContextWindow:  info.ContextWindow,
+			MaxOutput:      info.MaxOutput,
+			InputPrice:     info.InputPrice,
+			OutputPrice:    info.OutputPrice,
+			SupportsVision: info.SupportsVision,
+			SupportsTools:  info.SupportsTools,
+			SupportsStream: info.SupportsStream,
+			IsAvailable:    info.IsAvailable,
+			Source:         "manual",
+		},
+	})
+}
+
+// LookupBatchRequest 批量模型信息查询请求（不需要 provider ID，用于创建表单中）
+type LookupBatchRequest struct {
+	BaseURL  string   `json:"base_url" binding:"required"`
+	APIKey   string   `json:"api_key"`
+	ModelIDs []string `json:"model_ids" binding:"required"`
+}
+
+// LookupBatch 批量从 OpenRouter API 查询多个模型的详细信息（一次 API 调用）
+func (h *ProviderModelHandler) LookupBatch(c *gin.Context) {
+	var req LookupBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if len(req.ModelIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "model_ids is required"})
+		return
+	}
+
+	apiKey := req.APIKey
+	baseURL := strings.TrimSuffix(req.BaseURL, "/")
+
+	// 编辑模式下前端传空或 DUMMY_KEY：从 DB 中找到匹配的 provider 获取真实 key
+	if apiKey == "" || apiKey == "DUMMY_KEY_FOR_EDIT" {
+		var p model.Provider
+		if err := model.DB.Where("openrouter_base_url = ?", baseURL).First(&p).Error; err == nil && p.APIKey != "" {
+			apiKey = p.APIKey
+		}
+	}
+
+	if apiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "API key is required"})
+		return
+	}
+
+	registryModels, lookupErrors := openrouter.LookupModelsBatch(baseURL, apiKey, req.ModelIDs)
+
+	results := make([]providerModelResponse, len(registryModels))
+	for i, info := range registryModels {
+		results[i] = providerModelResponse{
+			ModelID:        info.ModelID,
+			DisplayName:    info.DisplayName,
+			OwnedBy:        info.OwnedBy,
+			ContextWindow:  info.ContextWindow,
+			MaxOutput:      info.MaxOutput,
+			InputPrice:     info.InputPrice,
+			OutputPrice:    info.OutputPrice,
+			SupportsVision: info.SupportsVision,
+			SupportsTools:  info.SupportsTools,
+			SupportsStream: info.SupportsStream,
+			IsAvailable:    info.IsAvailable,
+			Source:         "manual",
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"models": results,
+		"errors": lookupErrors,
+		"total":  len(results),
 	})
 }

@@ -33,23 +33,24 @@ func (User) TableName() string {
 }
 
 type Provider struct {
-	ID               uint   `gorm:"primaryKey"`
-	Slug             string `gorm:"uniqueIndex;size:8"`
-	Name             string `gorm:"uniqueIndex"`
-	OpenAIBaseURL    string `gorm:"column:openai_base_url"`
-	AnthropicBaseURL string `gorm:"column:anthropic_base_url"`
-	GeminiBaseURL    string `gorm:"column:gemini_base_url"`
-	DeepSeekBaseURL  string `gorm:"column:deepseek_base_url"`
-	APIKey           string
-	Enabled          bool   `gorm:"type:boolean;default:true"`
-	Priority         int    `gorm:"default:0"`
-	Config           string `gorm:"type:text"`
-	Endpoints        string `gorm:"type:text"` // JSON: {"openai":"https://...","gemini":"https://..."}
-	LastSyncAt       *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        gorm.DeletedAt
-	Models           []ProviderModel
+	ID                uint   `gorm:"primaryKey"`
+	Slug              string `gorm:"uniqueIndex;size:8"`
+	Name              string `gorm:"uniqueIndex"`
+	OpenAIBaseURL     string `gorm:"column:openai_base_url"`
+	AnthropicBaseURL  string `gorm:"column:anthropic_base_url"`
+	GeminiBaseURL     string `gorm:"column:gemini_base_url"`
+	DeepSeekBaseURL   string `gorm:"column:deepseek_base_url"`
+	OpenRouterBaseURL string `gorm:"column:openrouter_base_url"`
+	APIKey            string
+	Enabled           bool   `gorm:"type:boolean;default:true"`
+	Priority          int    `gorm:"default:0"`
+	Config            string `gorm:"type:text"`
+	Endpoints         string `gorm:"type:text"` // JSON: {"openai":"https://...","gemini":"https://..."}
+	LastSyncAt        *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletedAt         gorm.DeletedAt
+	Models            []ProviderModel
 }
 
 func (p *Provider) BeforeCreate(tx *gorm.DB) error {

@@ -357,6 +357,8 @@ func (h *UnifiedGatewayHandler) getBaseURL(p *model.Provider, protocol string) s
 		return strings.TrimSuffix(p.GeminiBaseURL, "/")
 	case "deepseek":
 		return strings.TrimSuffix(p.DeepSeekBaseURL, "/")
+	case "openrouter":
+		return strings.TrimSuffix(p.OpenRouterBaseURL, "/")
 	}
 	return ""
 }

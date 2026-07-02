@@ -12,7 +12,9 @@
           <el-tag v-if="provider?.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
           <el-tag v-if="provider?.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
           <el-tag v-if="provider?.gemini_base_url" type="warning" style="margin-right: 4px">Gemini</el-tag>
-          <el-tag v-if="provider?.deepseek_base_url" type="danger">DeepSeek</el-tag>
+          <el-tag v-if="provider?.deepseek_base_url" type="danger" style="margin-right: 4px">DeepSeek</el-tag>
+          <el-tag v-if="provider?.openrouter_base_url" type="info" style="margin-right: 4px">OpenRouter</el-tag>
+          <span v-if="!provider?.openai_base_url && !provider?.anthropic_base_url && !provider?.gemini_base_url && !provider?.deepseek_base_url && !provider?.openrouter_base_url">-</span>
         </el-descriptions-item>
         <el-descriptions-item :label="t('common.status')">
           <el-tag :type="provider?.enabled ? 'success' : 'info'">
@@ -92,7 +94,7 @@
     <el-dialog v-model="dialogVisible" :title="editingModel ? t('common.edit') : t('provider.addModel')" width="500px">
       <el-form :model="form" :rules="rules" ref="formRef" label-width="auto">
         <el-form-item :label="t('provider.modelId')" prop="model_id">
-          <el-input v-model="form.model_id" :disabled="editingModel && editingModel.source === 'sync'" />
+          <el-input v-model="form.model_id" :disabled="editingModel && (editingModel.source === 'sync' || isOpenRouterProvider)" />
         </el-form-item>
         <el-form-item :label="t('common.name')">
           <el-input v-model="form.display_name" />
@@ -100,24 +102,24 @@
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item :label="t('provider.contextWindow')">
-              <el-input-number v-model="form.context_window" :min="0" style="width: 100%" :disabled="editingModel && editingModel.source === 'sync'" />
+              <el-input-number v-model="form.context_window" :min="0" style="width: 100%" :disabled="editingModel && (editingModel.source === 'sync' || isOpenRouterProvider)" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item :label="t('provider.maxOutput')">
-              <el-input-number v-model="form.max_output" :min="0" style="width: 100%" :disabled="editingModel && editingModel.source === 'sync'" />
+              <el-input-number v-model="form.max_output" :min="0" style="width: 100%" :disabled="editingModel && (editingModel.source === 'sync' || isOpenRouterProvider)" />
             </el-form-item>
           </el-col>
         </el-row>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item :label="t('provider.inputPrice')">
-              <el-input-number v-model="form.input_price" :min="0" :precision="6" :step="0.0001" style="width: 100%" />
+              <el-input-number v-model="form.input_price" :min="0" :precision="8" :step="0.0001" style="width: 100%" :disabled="isOpenRouterProvider" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item :label="t('provider.outputPrice')">
-              <el-input-number v-model="form.output_price" :min="0" :precision="6" :step="0.0001" style="width: 100%" />
+              <el-input-number v-model="form.output_price" :min="0" :precision="8" :step="0.0001" style="width: 100%" :disabled="isOpenRouterProvider" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -200,7 +202,7 @@
         <div v-for="(result, idx) in testResults" :key="idx" class="test-result-item">
           <div class="test-result-header">
             <el-tag :type="result.success ? 'success' : 'danger'" size="large">
-              {{ result.protocol.toUpperCase() }} - {{ result.success ? t('common.success') : t('common.error') }}
+              {{ getProtocolLabel(result.protocol) }} - {{ result.success ? t('common.success') : t('common.error') }}
             </el-tag>
             <span class="test-result-method">
               {{ result.call_method === 'direct' ? t('provider.directCall') : t('provider.protocolConvert') }}
@@ -241,6 +243,17 @@ import { getSortConfig, setSortConfig } from '@/utils/tableSort'
 const { t } = useI18n()
 const route = useRoute()
 
+function getProtocolLabel(protocol: string) {
+  const labels: Record<string, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    gemini: 'Google Gemini',
+    deepseek: 'DeepSeek',
+    openrouter: 'OpenRouter',
+  }
+  return labels[protocol] || protocol.toUpperCase()
+}
+
 const provider = ref<any>(null)
 const models = ref<any[]>([])
 const selectedIds = ref<number[]>([])
@@ -261,6 +274,8 @@ const testModelInfo = ref<any>(null)
 const testResults = ref<any[]>([])
 
 const providerId = route.params.id as string
+
+const isOpenRouterProvider = computed(() => !!provider.value?.openrouter_base_url)
 
 const form = reactive({
   model_id: '',

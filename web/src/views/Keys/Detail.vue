@@ -357,10 +357,18 @@ const providerLabels: Record<string, { label: string; type: string }> = {
   anthropic: { label: 'Anthropic', type: 'primary' },
   gemini: { label: 'Gemini', type: 'warning' },
   deepseek: { label: 'DeepSeek', type: 'danger' },
+  openrouter: { label: 'OpenRouter', type: '' },
 }
 
 const keyProtocolLabel = computed(() => {
-  if (!key.value?.formats) return ''
+  if (!key.value?.formats || !key.value?.key) return ''
+  const rawKey = key.value.key
+  // 按密钥前缀判断主协议格式
+  if (rawKey.startsWith('sk-or-')) return 'OpenRouter'
+  if (rawKey.startsWith('sk-ant-')) return 'Anthropic'
+  if (rawKey.startsWith('AIza')) return 'Gemini'
+  if (rawKey.startsWith('sk-')) return 'OpenAI'
+  // fallback: 取第一个格式
   const fmtKeys = Object.keys(key.value.formats)
   const fmt = fmtKeys[0]
   if (!fmt) return ''
@@ -368,11 +376,13 @@ const keyProtocolLabel = computed(() => {
 })
 
 const keyProtocolType = computed((): 'success' | 'primary' | 'warning' | 'danger' | 'info' => {
-  if (!key.value?.formats) return 'info'
-  const fmtKeys = Object.keys(key.value.formats)
-  const fmt = fmtKeys[0]
-  if (!fmt) return 'info'
-  return (providerLabels[fmt]?.type as any) || 'info'
+  if (!key.value?.key) return 'info'
+  const rawKey = key.value.key
+  if (rawKey.startsWith('sk-or-')) return 'info'
+  if (rawKey.startsWith('sk-ant-')) return 'primary'
+  if (rawKey.startsWith('AIza')) return 'warning'
+  if (rawKey.startsWith('sk-')) return 'success'
+  return 'info'
 })
 
 const models = ref<any[]>([])

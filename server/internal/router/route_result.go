@@ -32,6 +32,10 @@ func (r *RouteResult) SupportProtocol(protocol string) bool {
 		return r.Provider.AnthropicBaseURL != ""
 	case "gemini":
 		return r.Provider.GeminiBaseURL != ""
+	case "deepseek":
+		return r.Provider.DeepSeekBaseURL != ""
+	case "openrouter":
+		return r.Provider.OpenRouterBaseURL != ""
 	}
 	return false
 }
@@ -59,6 +63,12 @@ func (r *RouteResult) GetProviderProtocols() []string {
 	}
 	if r.Provider.GeminiBaseURL != "" {
 		protocols = append(protocols, "gemini")
+	}
+	if r.Provider.DeepSeekBaseURL != "" {
+		protocols = append(protocols, "deepseek")
+	}
+	if r.Provider.OpenRouterBaseURL != "" {
+		protocols = append(protocols, "openrouter")
 	}
 	return protocols
 }
