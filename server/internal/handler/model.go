@@ -159,6 +159,7 @@ func (h *ModelHandler) Get(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"model": modelResponse{
 		ID:        m.ID,
+		Slug:      m.Slug,
 		Model:     m.Name,
 		Enabled:   m.Enabled,
 		CreatedAt: m.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -191,6 +192,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{"model": modelResponse{
 		ID:           m.ID,
+		Slug:      m.Slug,
 		Model:        m.Name,
 		Enabled:      m.Enabled,
 		MappingCount: 0,
@@ -250,6 +252,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"model": modelResponse{
 		ID:        m.ID,
+		Slug:      m.Slug,
 		Model:     m.Name,
 		Enabled:   m.Enabled,
 		CreatedAt: m.CreatedAt.Format("2006-01-02 15:04:05"),

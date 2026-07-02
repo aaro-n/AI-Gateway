@@ -109,6 +109,7 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
 		ID:               provider.ID,
+		Slug:      provider.Slug,
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
@@ -152,6 +153,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{"provider": providerResponse{
 		ID:               provider.ID,
+		Slug:      provider.Slug,
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
@@ -252,6 +254,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
 		ID:               provider.ID,
+		Slug:      provider.Slug,
 		Name:             provider.Name,
 		OpenAIBaseURL:    provider.OpenAIBaseURL,
 		AnthropicBaseURL: provider.AnthropicBaseURL,
