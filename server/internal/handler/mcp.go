@@ -9,8 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/mcp"
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 )
 
 var mcpManager = mcp.NewMCPManager()
@@ -39,6 +39,7 @@ type mcpUpdateRequest struct {
 
 type mcpResponse struct {
 	ID            uint       `json:"id"`
+	Slug          string     `json:"slug"`
 	Name          string     `json:"name"`
 	Type          string     `json:"type"`
 	Target        string     `json:"target,omitempty"`
@@ -363,6 +364,7 @@ func (h *MCPHandler) Sync(c *gin.Context) {
 func (h *MCPHandler) toResponse(m *model.MCP, toolCount, resourceCount, promptCount int) mcpResponse {
 	return mcpResponse{
 		ID:            m.ID,
+		Slug:          m.Slug,
 		Name:          m.Name,
 		Type:          m.Type,
 		Target:        m.Target,

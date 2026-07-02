@@ -53,7 +53,7 @@
           <template #default="{ row }">
             <el-button link type="success" @click="testModel(row)">{{ t('provider.test') }}</el-button>
             <el-button link type="primary" @click="showModelDialog(row)">{{ t('common.edit') }}</el-button>
-            <el-button link type="default" @click="goDetail(row.id)">{{ t('common.detail') }}</el-button>
+            <el-button link type="default" @click="goDetail(row.slug || row.id)">{{ t('common.detail') }}</el-button>
             <el-button link type="danger" @click="handleDeleteModel(row.id)">{{ t('common.delete') }}</el-button>
           </template>
         </el-table-column>
@@ -275,8 +275,8 @@ async function toggleModelEnabled(model: Model) {
   await api.put(`/models/${model.id}`, { enabled: model.enabled })
 }
 
-function goDetail(id: number) {
-  router.push(`/models/${id}`)
+function goDetail(idOrSlug: string | number) {
+  router.push(`/models/${idOrSlug}`)
 }
 
 async function testModel(model: Model) {

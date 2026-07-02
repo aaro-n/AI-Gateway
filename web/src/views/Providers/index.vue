@@ -35,7 +35,7 @@
         <el-table-column :label="t('common.action')" width="180">
           <template #default="{ row }">
             <el-button link type="primary" @click="showDialog(row.id)">{{ t('common.edit') }}</el-button>
-            <el-button link type="default" @click="goDetail(row.id)">{{ t('common.detail') }}</el-button>
+            <el-button link type="default" @click="goDetail(row.slug || row.id)">{{ t('common.detail') }}</el-button>
             <el-button link type="danger" @click="handleDelete(row.id)">{{ t('common.delete') }}</el-button>
           </template>
         </el-table-column>
@@ -636,8 +636,8 @@ async function toggleEnabled(row: any) {
   }
 }
 
-function goDetail(id: number) {
-  router.push(`/providers/${id}`)
+function goDetail(idOrSlug: string | number) {
+  router.push(`/providers/${idOrSlug}`)
 }
 
 function handleSortChange({ prop, order }: any) {

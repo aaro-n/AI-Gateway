@@ -8,8 +8,8 @@ import (
 	"gorm.io/gorm"
 
 	"ai-gateway/internal/core/registry"
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 	protocolsPkg "ai-gateway/internal/protocols"
 	"ai-gateway/internal/router"
 )
@@ -39,6 +39,7 @@ type updateProviderRequest struct {
 
 type providerResponse struct {
 	ID               uint                    `json:"id"`
+	Slug             string                  `json:"slug"`
 	Name             string                  `json:"name"`
 	OpenAIBaseURL    string                  `json:"openai_base_url"`
 	AnthropicBaseURL string                  `json:"anthropic_base_url"`
@@ -71,6 +72,7 @@ func (h *ProviderHandler) List(c *gin.Context) {
 
 		result[i] = providerResponse{
 			ID:               p.ID,
+			Slug:             p.Slug,
 			Name:             p.Name,
 			OpenAIBaseURL:    p.OpenAIBaseURL,
 			AnthropicBaseURL: p.AnthropicBaseURL,

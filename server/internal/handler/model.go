@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 )
 
 type ModelHandler struct{}
@@ -43,6 +43,7 @@ type updateMappingsOrderRequest struct {
 
 type modelResponse struct {
 	ID               uint              `json:"id"`
+	Slug             string            `json:"slug"`
 	Model            string            `json:"model"`
 	Enabled          bool              `json:"enabled"`
 	MappingCount     int               `json:"mapping_count"`
@@ -114,6 +115,7 @@ func (h *ModelHandler) List(c *gin.Context) {
 
 		result[i] = modelResponse{
 			ID:               a.ID,
+			Slug:             a.Slug,
 			Model:            a.Name,
 			Enabled:          a.Enabled,
 			MappingCount:     enabledCount,
