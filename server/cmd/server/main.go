@@ -129,7 +129,7 @@ func main() {
 
 		protected := api.Group("")
 		protected.Use(middleware.RequireAuth())
-		protected.Use(middleware.ResolveSlug("")) // auto-detect table from route prefix
+		protected.Use(middleware.ResolveSlug(""))
 		{
 			protected.GET("/auth/me", authHandler.Me)
 			protected.PUT("/auth/password", authHandler.ChangePassword)

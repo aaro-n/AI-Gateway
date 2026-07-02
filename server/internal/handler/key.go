@@ -11,8 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/registry"
-	"ai-gateway/internal/model"
 	"ai-gateway/internal/middleware"
+	"ai-gateway/internal/model"
 )
 
 type KeyHandler struct{}
@@ -464,9 +464,9 @@ func (h *KeyHandler) ListModels(c *gin.Context) {
 		kmMap[r.ModelID] = r
 	}
 
-	// 返回全部启用模型 + selected/enabled 标记
+	// 返回全部启用模型 + selected/enabled 标记（按 id 排序保证行序稳定）
 	var allModels []model.Model
-	if err := model.DB.Where("enabled = ?", true).Find(&allModels).Error; err != nil {
+	if err := model.DB.Where("enabled = ?", true).Order("id ASC").Find(&allModels).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -837,7 +837,7 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 	if cond, ok := fieldMap[protocol]; ok {
 		query = query.Where(cond)
 	}
-	query.Find(&pms)
+	query.Order("provider_models.id ASC").Find(&pms)
 
 	result := make([]providerModelWithStatusResponse, 0, len(pms))
 	for _, pm := range pms {

@@ -134,6 +134,7 @@ const router = useRouter()
 
 interface Model {
   id: number
+  slug: string
   name: string
   enabled: boolean
   mapping_count: number
@@ -194,6 +195,7 @@ async function fetchModels() {
     const res = await api.get('/models')
     models.value = (res.data.models || []).map((m: any) => ({
       id: m.id,
+      slug: m.slug,
       name: m.model,
       enabled: m.enabled,
       mapping_count: m.mapping_count,

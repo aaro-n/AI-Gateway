@@ -471,7 +471,6 @@ async function fetchModelTab() {
   modelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/models`)
-    // 只显示 selected=true (已在白名单的模型)
     models.value = (res.data.models || []).filter((m: any) => m.selected)
   } finally {
     modelsLoading.value = false
@@ -482,7 +481,6 @@ async function fetchProviderModels() {
   providerModelsLoading.value = true
   try {
     const res = await api.get(`/keys/${keyId}/provider-models`)
-    // 只显示白名单中的模型（selected=true，删除后下次不显示）
     providerModels.value = (res.data.models || []).filter((m: any) => m.selected)
   } finally {
     providerModelsLoading.value = false
@@ -525,6 +523,8 @@ async function toggleModel(row: any) {
   try {
     const res = await api.put(`/keys/${keyId}/models/${row.id}`)
     row.enabled = res.data.enabled
+    // 重新拉取以保持排序稳定（后端 ORDER BY id）
+    await fetchModelTab()
   } catch (e: any) {
     row.enabled = prev
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -547,6 +547,8 @@ async function toggleProviderModel(row: any) {
   try {
     const res = await api.put(`/keys/${keyId}/provider-models/${row.id}`)
     row.enabled = res.data.enabled
+    // 重新拉取以保持排序稳定（后端 ORDER BY id）
+    await fetchProviderModels()
   } catch (e: any) {
     row.enabled = prev
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -609,7 +611,7 @@ async function enableAllModels() {
   enablingModels.value = true
   try {
     await api.put(`/keys/${keyId}/models`)
-    models.value.forEach(m => m.enabled = true)
+    await fetchModelTab()
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -622,7 +624,7 @@ async function disableAllModels() {
   disablingModels.value = true
   try {
     await api.delete(`/keys/${keyId}/models`)
-    models.value.forEach(m => m.enabled = false)
+    await fetchModelTab()
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -635,7 +637,7 @@ async function enableAllProviderModels() {
   enablingProviderModels.value = true
   try {
     await api.put(`/keys/${keyId}/provider-models`)
-    providerModels.value.forEach(m => m.enabled = true)
+    await fetchProviderModels()
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))
@@ -648,7 +650,7 @@ async function disableAllProviderModels() {
   disablingProviderModels.value = true
   try {
     await api.delete(`/keys/${keyId}/provider-models`)
-    providerModels.value.forEach(m => m.enabled = false)
+    await fetchProviderModels()
     ElMessage.success(t('common.success'))
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || t('common.error'))

@@ -1,28 +1,12 @@
 // Package model 提供 ID/Slug 双向解析工具函数。
 package model
 
-import "strconv"
-
-// ResolveID 解析路由参数为 uint ID。
-// 支持 auto-increment ID（"5"）和短 hash slug（"Xa7F2k"）。
-// 先尝试解析为 uint，失败则按 slug 查表。
+// ResolveID 通过 slug 查找对应记录的 ID。
+// 仅接受 slug 字符串（如 "Xa7F2k"），纯数字 ID 将被拒绝。
 func ResolveID(param, slugColumn, table string) (uint, bool) {
 	if param == "" {
 		return 0, false
 	}
-
-	// 1. 尝试解析为 uint
-	if id, err := strconv.ParseUint(param, 10, 32); err == nil {
-		// 验证 ID 确实存在
-		var count int64
-		DB.Table(table).Where("id = ?", id).Count(&count)
-		if count > 0 {
-			return uint(id), true
-		}
-		return 0, false
-	}
-
-	// 2. 按 slug 查找
 	if slugColumn == "" {
 		slugColumn = "slug"
 	}
