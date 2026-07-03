@@ -195,14 +195,20 @@ debug:
   gorm: false     # GORM SQL 调试日志
   provider: false # Provider 调试日志
   mcp: false      # MCP 调试日志
+  log_file: ""    # 日志输出文件（空 = stdout）
 
 pprof:
   port: 6060      # 性能分析端口
 
 server:
   port: 18080     # 服务端口
+  trusted_proxies:  # 信任代理IP（逗号分隔）
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+  test_concurrency: 5  # 模型测试并发数
   session:
-    secret: ""    # Session 密钥
+    secret: ""    # Session 密钥（自动生成）
     max_age: 86400  # Session 有效期
 
 database:
@@ -216,6 +222,15 @@ auth:
   default_admin:
     username: admin
     password: admin
+
+monitor:
+  prometheus:
+    enabled: false       # 启用 Prometheus /metrics
+    metrics_token: ""    # /metrics Bearer token
+  otel:
+    enabled: false       # 启用 OpenTelemetry
+    endpoint: ""         # OTLP Collector 地址
+    service_name: ai-gateway
 ```
 
 #### 环境变量配置
@@ -247,8 +262,16 @@ auth:
 | `AG_SERVER_SESSION_SECURE` | `false` | Cookie Secure 标志 |
 | `AG_SERVER_SESSION_HTTP_ONLY` | `true` | Cookie HttpOnly 标志 |
 | `AG_SERVER_SESSION_SAME_SITE` | `lax` | Cookie SameSite 属性 |
+| `AG_DEBUG_LOG_FILE` | `""` | 日志输出文件路径（留空 = 仅 stdout/stderr） |
+| `AG_LOG_LEVEL` | `info` | 日志级别 (debug/info/warn/error) |
+| `AG_TEST_CONCURRENCY` | `5` | 模型测试并发数 |
 | `AG_ADMIN_USERNAME` | `admin` | 默认管理员用户名 |
 | `AG_ADMIN_PASSWORD` | `admin` | 默认管理员密码 |
+| `AG_MONITOR_PROMETHEUS_ENABLED` | `false` | 启用 Prometheus `/metrics` 端点 |
+| `AG_MONITOR_PROMETHEUS_METRICS_TOKEN` | `""` | Prometheus `/metrics` Bearer token（空 = 无需认证） |
+| `AG_MONITOR_OTEL_ENABLED` | `false` | 启用 OpenTelemetry（链路追踪 + 指标导出） |
+| `AG_MONITOR_OTEL_ENDPOINT` | `""` | OTLP Collector 地址（如 `http://localhost:4318`） |
+| `AG_MONITOR_OTEL_SERVICE_NAME` | `ai-gateway` | OTel 服务名称（在 Jaeger/Tempo 中标识） |
 
 ### 数据库配置
 
@@ -269,7 +292,7 @@ database:
 ```sql
 CREATE DATABASE ai_gateway;
 CREATE USER your_username WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE ai_gateway TO ai_gateway;
+GRANT ALL PRIVILEGES ON DATABASE ai_gateway TO your_username;
 ```
 
 2. 配置连接：
