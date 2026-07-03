@@ -9,18 +9,22 @@
 
 ## 特性
 
-- **多协议网关**: 当前支持 OpenAI/Anthropic API 代理，已经支持 MCP 协议
-- **OpenAI 兼容 API**: 暴露标准的 `/openai/v1/chat/completions` 和 `/openai/v1/models` 接口
-- **Anthropic 兼容 API**: 暴露标准的 `/anthropic/v1/messages` 和 `/anthropic/v1/models` 接口
+- **五协议统一网关**: 支持 OpenAI / Anthropic / Gemini / DeepSeek / OpenRouter 五种 AI API 协议代理
+- **轴辐式协议转换** (Hub-and-Spoke): 以 OpenAI 格式为统一中间表示，任意协议之间自动双向转换
+- **OpenAI 兼容 API**: 暴露标准的 `/gateway/openai/v1/chat/completions` 端点
+- **Anthropic 兼容 API**: 暴露标准的 `/gateway/anthropic/v1/messages` 端点
+- **Gemini 兼容 API**: 暴露标准的 `/gateway/gemini/v1beta/models/*` 端点
+- **DeepSeek 兼容 API**: 暴露标准的 `/gateway/deepseek/v1/chat/completions` 端点
+- **OpenRouter 兼容 API**: 暴露标准的 `/gateway/openrouter/v1/chat/completions` 端点
 - **MCP 兼容 API**: 暴露标准的 `/mcp/v1` 接口
-- **多厂商支持**: 支持多种 AI 服务厂商（OpenAI、Anthropic双协议兼容），可轻松扩展
-- **双协议支持**：每个厂商可同时配置 OpenAI 和 Anthropic BaseURL
-- **格式自动转换**: OpenAI ↔ Anthropic 请求/响应格式自动转换
-- **模型映射**：用户使用统一的模型名称，无需关心后端实际模型
-- **故障转移**：Provider 连续返回 429 时自动切换，配置更新时自动恢复
-- **用量统计**: 请求日志和用量仪表盘，实时监控服务调用
-- **API Key 管理**: 生成和管理网关 API Key，支持模型、MCP访问权限控制
-- **Web 控制台**: Vue 3 管理界面，支持中英文、暗色模式
+- **双模式路由**: Direct（直通穿透）+ Mapping（虚拟模型映射）+ Hybrid（智能混合），白名单精确到模型ID级别
+- **跨厂商穿透**: 用 OpenAI Key 直通调用 DeepSeek 模型，自动协议转换
+- **流式输出**: 支持 SSE（Server-Sent Events）流式响应，含 reasoning_content / tool_use 完整透传
+- **故障转移**: Provider 连续返回 429 时自动冷却，配置更新时自动恢复
+- **用量统计**: 请求日志和用量仪表盘，区分 call_method（direct/convert），实时监控
+- **可观测性**: 支持 OpenTelemetry + Prometheus 指标导出，请求级 Trace ID
+- **API Key 管理**: 生成和管理网关 API Key，支持模型/MCP访问权限控制，一键重置
+- **Web 控制台**: Vue 3 管理界面，支持中英文、暗色模式、表格排序、协议对比
 
 ## 外观
 
@@ -290,20 +294,24 @@ AG_DATABASE_DBNAME=ai_gateway \
 
 ## API 接口
 
-### OpenAI 兼容接口 (需要 API Key)
+### 五协议网关接口 (需要 API Key)
 
 ```
-POST /openai/v1/chat/completions   # 聊天补全
-GET  /openai/v1/models             # 模型列表
-GET  /openai/v1/models/:id         # 模型详情
-```
+# OpenAI 协议
+POST /gateway/openai/v1/chat/completions   # 聊天补全 (流式/非流式)
 
-### Anthropic 兼容接口 (需要 API Key)
+# Anthropic 协议
+POST /gateway/anthropic/v1/messages        # Messages API (流式/非流式)
 
-```
-POST /anthropic/v1/messages        # Anthropic Messages API
-GET  /anthropic/v1/models          # 模型列表
-POST /anthropic/v1/models/:id      # 模型详情
+# Gemini 协议
+POST /gateway/gemini/v1beta/models/:model:generateContent       # 非流式
+POST /gateway/gemini/v1beta/models/:model:streamGenerateContent # 流式 SSE
+
+# DeepSeek 协议
+POST /gateway/deepseek/v1/chat/completions # 聊天补全 (含 reasoning_content)
+
+# OpenRouter 协议
+POST /gateway/openrouter/v1/chat/completions # 聊天补全
 ```
 
 ### MCP 协议接口 (需要 API Key)
@@ -376,22 +384,40 @@ GET  /api/v1/usage/mcp-logs             # 用量日志
 ## 使用示例
 
 ```bash
-# OpenAI 格式调用
-curl http://localhost:18080/openai/v1/chat/completions \
+# OpenAI 协议调用 (Authorization: Bearer)
+curl http://localhost:18080/gateway/openai/v1/chat/completions \
   -H "Authorization: Bearer sk-your-key" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": false
+  }'
+
+# Anthropic 协议调用 (x-api-key)
+curl http://localhost:18080/gateway/anthropic/v1/messages \
+  -H "x-api-key: sk-ant-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 1024,
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
-# Anthropic 格式调用
-curl http://localhost:18080/anthropic/v1/messages \
-  -H "x-api-key: sk-your-key" \
+# Gemini 协议调用 (Query String)
+curl "http://localhost:18080/gateway/gemini/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaYourKey" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "claude-3-opus",
-    "max_tokens": 1024,
+    "contents": [{"parts": [{"text": "Hello!"}]}],
+    "generationConfig": {"maxOutputTokens": 100}
+  }'
+
+# DeepSeek 协议调用 (Authorization: Bearer)
+curl http://localhost:18080/gateway/deepseek/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-v4-pro",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
