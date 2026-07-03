@@ -42,34 +42,40 @@
 
 ```mermaid
 flowchart TD
-    subgraph 入口["入口 (双协议支持)"]
-        A1["OpenAI 入口<br/>POST /openai/v1/chat/completions<br/>Authorization: Bearer sk-xxx"]
-        A2["Anthropic 入口<br/>POST /anthropic/v1/messages<br/>x-api-key: sk-xxx"]
+    subgraph 入口["入口 (五协议支持)"]
+        A1["OpenAI<br/>POST /gateway/openai/v1/chat/completions<br/>Authorization: Bearer sk-xxx"]
+        A2["Anthropic<br/>POST /gateway/anthropic/v1/messages<br/>x-api-key: sk-ant-xxx"]
+        A3["Gemini<br/>POST /gateway/gemini/v1beta/models/:model:generateContent<br/>?key=AIza..."]
+        A4["DeepSeek<br/>POST /gateway/deepseek/v1/chat/completions<br/>Authorization: Bearer sk-xxx"]
+        A5["OpenRouter<br/>POST /gateway/openrouter/v1/chat/completions<br/>Authorization: Bearer sk-or-xxx"]
     end
 
     A1 --> B
     A2 --> B
+    A3 --> B
+    A4 --> B
+    A5 --> B
 
-    B["API Key 认证<br/>验证 Key 有效性和模型权限"]
-    --> C["模型路由<br/>Alias → AliasMapping → Provider → ProviderModel<br/>按 weight 排序"]
+    B["API Key 认证<br/>验证 Key 有效性和协议格式"]
+    --> C["模型路由<br/>Direct（直通）/ Mapping（映射）/ Hybrid（混合）"]
 
-    --> D{"协议匹配决策"}
+    --> D{"路由模式"}
 
-    D -->|"协议相同"| S1
-    D -->|"协议不同"| S2
+    D -->|"Direct / Hybrid"| S1
+    D -->|"Mapping"| S2
 
-    subgraph 直通流程["直通流程 (无需转换)"]
-        S1["模型替换<br/>alias → actual_model_id"]
-        --> R1["请求后端 API<br/>透传请求体"]
+    subgraph 直通流程["直通流程 (Direct 穿透)"]
+        S1["Direct 路由<br/>provider_models.model_id 精确匹配"]
+        --> R1["请求后端 API<br/>同协议直通或跨协议转换"]
         --> RES1["返回响应<br/>流式/非流式"]
         --> TK1["Token 统计"]
     end
 
-    subgraph 转换流程["转换流程 (协议转换)"]
-        S2["模型替换<br/>alias → actual_model_id"]
-        --> TR1["请求转换<br/>OpenAI ↔ Anthropic"]
-        --> R2["请求后端 API"]
-        --> TR2["响应转换<br/>Anthropic ↔ OpenAI"]
+    subgraph 映射流程["映射流程 (Mapping 转换)"]
+        S2["映射路由<br/>虚拟Model → Mapping → ProviderModel"]
+        --> TR1["ToUnified<br/>入口协议 → 统一中间表示"]
+        --> R2["FromUnified<br/>统一表示 → 上游协议请求"]
+        --> TR2["FormatUnified<br/>上游响应 → 入口协议格式"]
         --> RES2["返回响应<br/>流式/非流式"]
         --> TK2["Token 统计"]
     end
@@ -149,7 +155,7 @@ flowchart TD
 
 ```bash
 # 克隆项目
-git clone https://github.com/lx0758/AI-Gateway.git ai-gateway
+git clone https://github.com/aaro-n/AI-Gateway.git ai-gateway
 
 # 构建
 cd ai-gateway
@@ -344,11 +350,23 @@ PUT  /api/v1/providers/:id              # 更新厂商
 DELETE /api/v1/providers/:id            # 删除厂商
 POST /api/v1/providers/:id/test         # 测试连接
 POST /api/v1/providers/:id/sync         # 同步模型
+GET  /api/v1/providers/:id/models       # 厂商模型列表
+POST /api/v1/providers/:id/models       # 添加厂商模型
+PUT  /api/v1/providers/:id/models/:mid  # 更新厂商模型
+DELETE /api/v1/providers/:id/models/:mid # 删除厂商模型
+POST /api/v1/providers/:id/models/lookup # 查找模型
+POST /api/v1/providers/:id/test-custom  # 测试自定义模型
 
-GET  /api/v1/aliases                    # 模型别名列表
-POST /api/v1/aliases                    # 创建别名
-PUT  /api/v1/aliases/:id                # 更新别名
-DELETE /api/v1/aliases/:id              # 删除别名
+GET  /api/v1/models                     # 虚拟模型列表
+POST /api/v1/models                     # 创建虚拟模型
+GET  /api/v1/models/:id                 # 模型详情
+PUT  /api/v1/models/:id                 # 更新模型
+DELETE /api/v1/models/:id               # 删除模型
+GET  /api/v1/models/:id/mappings        # 模型映射列表
+POST /api/v1/models/:id/mappings        # 添加模型映射
+PUT  /api/v1/models/:id/mappings/:mid   # 更新映射
+DELETE /api/v1/models/:id/mappings/:mid # 删除映射
+POST /api/v1/models/:id/test            # 测试模型
 
 GET  /api/v1/keys                       # API Key 列表
 POST /api/v1/keys                       # 创建 API Key
@@ -357,7 +375,14 @@ DELETE /api/v1/keys/:id                 # 删除 API Key
 POST /api/v1/keys/:id/reset             # 重置 API Key
 GET  /api/v1/keys/:id/models            # 获取 Key 的模型权限
 PUT  /api/v1/keys/:id/models            # 更新 Key 的模型权限
-DELETE  /api/v1/keys/:id/models         # 全部允许 Key 的模型权限
+DELETE  /api/v1/keys/:id/models         # 清空 Key 模型映射白名单
+PUT    /api/v1/keys/:id/models         # 全部允许 Key 模型映射
+GET    /api/v1/keys/:id/providers       # Key 厂商白名单
+POST   /api/v1/keys/:id/providers/:pid  # 添加厂商白名单
+DELETE /api/v1/keys/:id/providers/:pid  # 删除厂商白名单
+GET    /api/v1/keys/:id/provider-models # Key 直通模型白名单
+POST   /api/v1/keys/:id/provider-models/:pmid  # 添加直通模型
+DELETE /api/v1/keys/:id/provider-models/:pmid  # 删除直通模型
 GET  /api/v1/keys/:id/mcp-tools         # 获取 Key 的 MCP 工具权限
 PUT  /api/v1/keys/:id/mcp-tools         # 更新 Key 的 MCP 工具权限
 DELETE  /api/v1/keys/:id/mcp-tools      # 全部允许 Key 的 MCP 工具权限
@@ -368,13 +393,16 @@ GET  /api/v1/keys/:id/mcp-prompts       # 获取 Key 的 MCP 提示词权限
 PUT  /api/v1/keys/:id/mcp-prompts       # 更新 Key 的 MCP 提示词权限
 DELETE  /api/v1/keys/:id/mcp-prompts    # 全部允许 Key 的 MCP 提示词权限
 
-GET  /api/v1/mcp-services               # MCP 服务列表
-POST /api/v1/mcp-services               # 创建 MCP 服务
-GET  /api/v1/mcp-services/:id           # 获取 MCP 服务
-PUT  /api/v1/mcp-services/:id           # 更新 MCP 服务
-DELETE /api/v1/mcp-services/:id         # 删除 MCP 服务
-POST /api/v1/mcp-services/:id/test      # 测试 MCP 服务连接
-POST /api/v1/mcp-services/:id/sync      # 同步 MCP 服务资源
+GET  /api/v1/mcps                       # MCP 服务列表
+POST /api/v1/mcps                       # 创建 MCP 服务
+GET  /api/v1/mcps/:id                   # 获取 MCP 服务
+PUT  /api/v1/mcps/:id                   # 更新 MCP 服务
+DELETE /api/v1/mcps/:id                 # 删除 MCP 服务
+POST /api/v1/mcps/:id/test              # 测试 MCP 服务连接
+POST /api/v1/mcps/:id/sync              # 同步 MCP 服务资源
+GET  /api/v1/mcps/:id/tools             # MCP 工具列表
+GET  /api/v1/mcps/:id/resources         # MCP 资源列表
+GET  /api/v1/mcps/:id/prompts           # MCP 提示词列表
 
 GET  /api/v1/usage/dashboard            # 仪表盘数据
 GET  /api/v1/usage/model-logs           # 用量统计
@@ -475,9 +503,14 @@ ai-gateway/
 │   │   ├── mcp/                # MCP实现
 │   │   ├── middleware/         # 中间件
 │   │   ├── model/              # 数据模型
-│   │   ├── provider/           # 厂商实现
-│   │   ├── router/             # 模型路由
-│   │   ├── utils/              # 工具函数
+│   │   ├── protocols/          # 五协议实现 (openai/anthropic/gemini/deepseek/openrouter)
+│   │   ├── core/
+│   │   │   ├── handler/        # 统一网关处理器
+│   │   │   ├── registry/       # 协议注册表
+│   │   │   ├── unified/        # 统一中间表示 (Unified Request/Response)
+│   │   │   └── errors/         # 错误日志 & Trace
+│   │   ├── router/             # 模型路由 (Direct/Mapping/Cooldown)
+│   │   ├── monitor/            # 可观测性 (Prometheus/OpenTelemetry)
 │   ├── res/                    # 静态资源
 │   └── go.mod
 └── openspec/                   # 设计文档

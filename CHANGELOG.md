@@ -16,10 +16,10 @@
 - **模型测试**: 支持对虚拟模型和 Provider Model 发起测试调用
 
 ### Changed
-- **API 端点重构**: 网关端点从 `/openai/v1/*` 迁移到 `/gateway/openai/v1/*`，统一命名空间
+- **API 端点重构**: `/openai/v1/*` + `/anthropic/v1/*` 分离路由 → 统一 `/gateway/:protocol/*`（轴辐式，所有协议共用统一网关处理器）
 - **厂商列表页**: 显示各厂商支持的协议格式标签
-- **Key 详情页**: 新增协议标签显示
-- **模型路由**: `Route()` 添加 Provider nil 空指针保护
+- **Key 详情页**: 新增协议标签、直通白名单 Tab、映射白名单 Tab 分离
+- **模型路由**: `Route()` / `RouteDirect()` 添加 Provider nil 空指针保护
 
 ### Fixed
 - 修复模型测试后 `is_available=false` 导致路由永久跳过 Provider Model
@@ -31,16 +31,18 @@
 - 修复 Gemini/DeepSeek 厂商协议转换中流式 thinking/tool_use 字段
 
 ### Security
-- 协议端点强制 Key Format 校验：跨协议 Key 返回 403
-- API Key 直通白名单与映射白名单冲突检测（双保险）
+- 协议端点强制 Key Format 校验：跨协议 Key 返回 403（如 OpenAI Key 不可用于 Anthropic 端点）
+- API Key 直通白名单与映射白名单冲突检测：同一 model_id 不可同时存在于 key_provider_models 和 key_models（双保险）
+- 路由层双重检查：添加模型时检查 + 请求时运行时检查
 
 ---
 
-## Previous (before refactor)
+## Previous
 
-- 初始版本: OpenAI/Anthropic 双向协议转换
-- MCP 协议代理支持
-- Web 管理控制台 (Vue 3)
-- SQLite/PostgreSQL 双数据库支持
-- 故障转移 & 冷却机制
-- 用量统计仪表盘
+### v0.x (before Hub-and-Spoke refactor)
+- OpenAI ↔ Anthropic 双向协议转换
+- MCP 协议代理 (JSON-RPC 2.0)
+- Web 管理控制台 (Vue 3 + i18n + 暗色模式)
+- SQLite / PostgreSQL 双数据库支持
+- Provider 故障转移 & 冷却机制 (Cooldown Manager)
+- 用量统计仪表盘 & 请求日志
