@@ -46,6 +46,7 @@ type updateProviderModelRequest struct {
 	SupportsVision *bool    `json:"supports_vision"`
 	SupportsTools  *bool    `json:"supports_tools"`
 	SupportsStream *bool    `json:"supports_stream"`
+	IsAvailable    *bool    `json:"is_available"`
 }
 
 type providerModelResponse struct {
@@ -230,6 +231,9 @@ func (h *ProviderModelHandler) Update(c *gin.Context) {
 	}
 	if req.SupportsStream != nil {
 		updates["supports_stream"] = *req.SupportsStream
+	}
+	if req.IsAvailable != nil {
+		updates["is_available"] = *req.IsAvailable
 	}
 
 	if req.ModelID != nil && *req.ModelID != "" && *req.ModelID != pm.ModelID {

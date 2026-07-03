@@ -138,7 +138,7 @@ func (h *MCPHandler) Create(c *gin.Context) {
 
 func (h *MCPHandler) List(c *gin.Context) {
 	var mcps []model.MCP
-	if err := model.DB.Find(&mcps).Error; err != nil {
+	if err := model.DB.Order("name ASC").Find(&mcps).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

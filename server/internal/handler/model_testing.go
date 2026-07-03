@@ -613,19 +613,9 @@ func saveTestResults(providerID uint, providerModelID uint, modelID string, test
 		}
 	}
 
-	// 如果是已保存的 provider model，更新 is_available 状态
-	if providerModelID > 0 {
-		allOk := len(tests) > 0
-		for _, t := range tests {
-			if !t.Success {
-				allOk = false
-				break
-			}
-		}
-		if err := model.DB.Model(&model.ProviderModel{}).Where("id = ?", providerModelID).Update("is_available", allOk).Error; err != nil {
-			log.Printf("[TestResult] Failed to update is_available: %v", err)
-		}
-	}
+	// 测试结果仅用于展示，不自动修改路由可用性 (is_available)。
+	// 路由可用性由 cooldown manager 实时管理，测试结果不应产生副作用影响线上路由。
+	_ = providerModelID // 保留参数兼容性
 }
 
 // getTestResultsResponse 某个模型的最近一次测试结果

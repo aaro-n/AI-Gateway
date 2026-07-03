@@ -14,7 +14,9 @@ import (
 	coreErrors "ai-gateway/internal/core/errors"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/monitor"
 	"ai-gateway/internal/router"
 	"ai-gateway/internal/utils"
 )
@@ -41,10 +43,17 @@ func NewUnifiedGatewayHandler() *UnifiedGatewayHandler {
 // Handle 统一处理 /gateway/:protocol/*
 func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	protocolName := c.Param("protocol")
+	traceID := middleware.GetTraceID(c)
+
+	coreErrors.TraceDebugKVs(traceID, "gateway_enter",
+		"protocol", protocolName,
+		"method", c.Request.Method,
+		"path", c.Request.URL.Path)
 
 	// 1. 获取入口协议描述符
 	entryDesc, ok := registry.Get(protocolName)
 	if !ok {
+		coreErrors.TraceWarn(traceID, "unsupported protocol: %s", protocolName)
 		c.JSON(http.StatusNotFound, gin.H{"error": "unsupported protocol: " + protocolName})
 		return
 	}
@@ -52,58 +61,84 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	// 2. 提取并验证 API Key
 	rawKey := entryDesc.AuthExtractor(c)
 	if rawKey == "" {
+		coreErrors.TraceWarn(traceID, "missing API key")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing API key"})
 		return
 	}
 
 	var kf model.KeyFormat
 	if err := model.DB.Where("formatted_key = ?", rawKey).First(&kf).Error; err != nil {
+		coreErrors.TraceWarn(traceID, "invalid API key")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
 		return
 	}
 	if kf.Format != protocolName {
+		coreErrors.TraceWarn(traceID, "key_format_mismatch key_format=%s entry_protocol=%s key_id=%d", kf.Format, protocolName, kf.KeyID)
 		c.JSON(http.StatusForbidden, gin.H{"error": "key format not allowed on this endpoint"})
 		return
 	}
 
 	var apiKey model.Key
 	if err := model.DB.Where("id = ? AND enabled = ?", kf.KeyID, true).First(&apiKey).Error; err != nil {
+		coreErrors.TraceWarn(traceID, "invalid API key (disabled or deleted) key_id=%d", kf.KeyID)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid API key"})
 		return
 	}
 	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now()) {
+		coreErrors.TraceWarn(traceID, "API key expired key_id=%d expires_at=%s", apiKey.ID, apiKey.ExpiresAt.String())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "API key expired"})
 		return
 	}
 
+	coreErrors.TraceDebugKVs(traceID, "key_authenticated",
+		"key_id", fmt.Sprintf("%d", apiKey.ID),
+		"key_name", apiKey.Name,
+		"access_mode", apiKey.AccessMode)
+
 	// 3. 读取请求体（ToUnified 需要）
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		coreErrors.TraceError(traceID, "read_body_failed err=%v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "read body: " + err.Error()})
 		return
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 
+	coreErrors.TraceDebug(traceID, "request_body_size=%d", len(body))
+
 	// 4. 提取模型名
 	modelName := h.extractModel(c, body)
 	if modelName == "" {
+		coreErrors.TraceWarn(traceID, "missing model identifier in request body")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing model identifier"})
 		return
 	}
 
+	coreErrors.TraceDebugKVs(traceID, "model_extracted",
+		"model", modelName)
+
 	// 5. 路由（支持 mapping/direct/hybrid 三种 AccessMode）
 	result, isDirectCall, routeErr := h.route(apiKey, modelName)
 	if routeErr != nil {
+		coreErrors.TraceError(traceID, "route_failed model=%s err=%v", modelName, routeErr)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": routeErr.Error()})
 		return
 	}
 	if result == nil {
+		coreErrors.TraceWarn(traceID, "no_model_mapping_or_provider model=%s access_mode=%s", modelName, apiKey.AccessMode)
 		c.JSON(http.StatusNotFound, gin.H{"error": "model mapping not found or no available provider"})
 		return
 	}
 
+	coreErrors.TraceDebugKVs(traceID, "route_success",
+		"provider", result.Provider.Name,
+		"provider_model", result.ProviderModel.ModelID,
+		"is_direct", fmt.Sprintf("%v", isDirectCall),
+		"base_url", result.Provider.OpenAIBaseURL)
+
 	// 5.1 重复检查（双保险）：该 key 的直通白名单与映射白名单不应有相同 model_id
 	if conflict := h.checkKeyConflict(apiKey.ID); conflict != "" {
+		coreErrors.TraceError(traceID, "key_model_conflict key_id=%d conflict=%s", apiKey.ID, conflict)
 		c.JSON(http.StatusForbidden, gin.H{"error": "API key has model ID conflict: " + conflict})
 		return
 	}
@@ -111,6 +146,7 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	// 6. 权限检查（mapping 模式下校验 key_models）
 	if !isDirectCall {
 		if err := h.verifyKeyID(apiKey.ID, modelName); err != nil {
+			coreErrors.TraceWarn(traceID, "permission_denied model=%s key_id=%d err=%v", modelName, apiKey.ID, err)
 			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return
 		}
@@ -120,14 +156,20 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	entryProv := entryDesc.NewProvider(&registry.Config{})
 	unifiedReq, err := entryProv.ToUnified(body, result.ProviderModel.ModelID)
 	if err != nil {
+		coreErrors.TraceError(traceID, "to_unified_failed from=%s err=%v", protocolName, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "parse request: " + err.Error()})
 		return
 	}
 	unifiedReq.SourceProtocol = protocolName
 
+	coreErrors.TraceDebugKVs(traceID, "to_unified_done",
+		"stream", fmt.Sprintf("%v", unifiedReq.Stream),
+		"has_tools", fmt.Sprintf("%v", len(unifiedReq.Tools) > 0))
+
 	// Gemini Stream 检测（Gemini 通过 URL 区分流式，body 中无 Stream 字段）
 	if protocolName == "gemini" && strings.Contains(c.Request.URL.Path, "streamGenerateContent") {
 		unifiedReq.Stream = true
+		coreErrors.TraceDebug(traceID, "gemini_stream_detected via URL")
 	}
 
 	// 8. 选择上游协议并执行
@@ -155,10 +197,10 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		errMsg = execErr.Error()
 		if httpErr, ok := execErr.(*registry.HTTPError); ok && httpErr.IsRateLimit() {
 			h.modelRouter.RecordRateLimit(result.Provider.ID, result.ProviderModel.ID)
+			coreErrors.TraceWarn(traceID, "rate_limited provider=%s model=%s", result.Provider.Name, result.ProviderModel.ModelID)
 		}
-		coreErrors.Error("gateway error: %s | %s %s | model=%s→%s | %dms",
-			errMsg, c.Request.Method, originalPath,
-			modelName, upstreamProtocol, latencyMs)
+		coreErrors.TraceError(traceID, "upstream_failed upstream=%s model=%s provider_model=%s latency_ms=%d err=%s",
+			upstreamProtocol, modelName, result.ProviderModel.ModelID, latencyMs, errMsg)
 	} else {
 		h.modelRouter.RecordSuccess(result.Provider.ID, result.ProviderModel.ID)
 	}
@@ -172,10 +214,28 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	)
 	model.DB.Create(modelLog)
 
+	// ── 指标记录 (Prometheus / OpenTelemetry) ──
+	monitor.GlobalRecorder.RecordRelayRequest(start, modelName, result.ProviderModel.ModelID,
+		protocolName, upstreamProtocol, execErr == nil,
+		usage.InputTokens, usage.OutputTokens, usage.CachedTokens)
+
+	callType := classifyCall(matched, isDirectCall)
 	if status == "success" {
-		coreErrors.Info("%s %s → %s | %s | %dt %dms",
-			protocolName, modelName, upstreamProtocol,
-			classifyCall(matched, isDirectCall), usage.TotalTokens(), latencyMs)
+		coreErrors.TraceInfoKVs(traceID, "gateway_success",
+			"entry_protocol", protocolName,
+			"upstream_protocol", upstreamProtocol,
+			"model", modelName,
+			"provider_model", result.ProviderModel.ModelID,
+			"provider", result.Provider.Name,
+			"call_type", callType,
+			"tokens", fmt.Sprintf("%d", usage.TotalTokens()),
+			"latency_ms", fmt.Sprintf("%d", latencyMs),
+			"key_id", fmt.Sprintf("%d", apiKey.ID),
+			"key_name", apiKey.Name)
+	} else {
+		coreErrors.TraceError(traceID, "gateway_failed entry=%s upstream=%s model=%s provider=%s call_type=%s err=%s latency_ms=%d",
+			protocolName, upstreamProtocol, modelName, result.Provider.Name,
+			callType, errMsg, latencyMs)
 	}
 }
 
@@ -261,6 +321,8 @@ func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
 func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 	result *router.RouteResult, usage *registry.Usage) (string, error) {
 
+	traceID := middleware.GetTraceID(c)
+
 	// 选择上游协议：优先同协议直通，否则任选一个支持的协议
 	providerProtos := result.GetProviderProtocols()
 	if len(providerProtos) == 0 {
@@ -278,6 +340,12 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 		upstreamProto = providerProtos[0]
 	}
 
+	coreErrors.TraceDebugKVs(traceID, "upstream_selected",
+		"upstream_protocol", upstreamProto,
+		"source_protocol", req.SourceProtocol,
+		"is_conversion", fmt.Sprintf("%v", upstreamProto != req.SourceProtocol),
+		"provider_protocols", strings.Join(providerProtos, ","))
+
 	upDesc, ok := registry.Get(upstreamProto)
 	if !ok {
 		return upstreamProto, fmt.Errorf("unsupported upstream protocol: %s", upstreamProto)
@@ -288,6 +356,8 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 		return upstreamProto, fmt.Errorf("no base URL for protocol %s", upstreamProto)
 	}
 
+	coreErrors.TraceDebug(traceID, "upstream_base_url=%s", baseURL)
+
 	cfg := &registry.Config{BaseURL: baseURL, APIKey: result.Provider.APIKey}
 	upProv := upDesc.NewProvider(cfg)
 
@@ -297,12 +367,15 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 	var err error
 
 	if outbound, ok := upProv.(registry.Outbound); ok {
+		coreErrors.TraceDebug(traceID, "using_outbound_interface")
 		resp, events, err = outbound.BuildRequest(req)
 	} else {
+		coreErrors.TraceDebug(traceID, "using_from_unified")
 		resp, events, err = upProv.FromUnified(req)
 	}
 
 	if err != nil {
+		coreErrors.TraceError(traceID, "upstream_build_request_failed err=%v", err)
 		if httpErr, ok := err.(*registry.HTTPError); ok {
 			c.Status(httpErr.StatusCode)
 			c.Header("Content-Type", "application/json")
@@ -317,6 +390,7 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 
 	// 优先使用 Inbound 接口
 	if inbound, ok := entryProv.(registry.Inbound); ok {
+		coreErrors.TraceDebug(traceID, "using_inbound_interface for response formatting")
 		return upstreamProto, inbound.FormatResponse(resp, events, c, usage)
 	}
 	return upstreamProto, entryProv.FormatUnified(resp, events, c, usage)

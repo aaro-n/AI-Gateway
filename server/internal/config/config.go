@@ -19,6 +19,23 @@ type Config struct {
 	Database DatabaseConfig
 	Auth     AuthConfig
 	Pprof    PprofConfig
+	Monitor  MonitorConfig
+}
+
+type MonitorConfig struct {
+	Prometheus MonitorPrometheusConfig
+	Otel       MonitorOtelConfig
+}
+
+type MonitorPrometheusConfig struct {
+	Enabled      bool
+	MetricsToken string // /metrics 端点的 Bearer token（空 = 不启用认证）
+}
+
+type MonitorOtelConfig struct {
+	Enabled     bool
+	Endpoint    string // OTLP collector 地址，如 http://localhost:4318
+	ServiceName string
 }
 
 type ServerConfig struct {
@@ -33,6 +50,7 @@ type DebugConfig struct {
 	Gorm     bool
 	Provider bool
 	MCP      bool
+	LogFile  string // 日志文件路径，空 = stdout/stderr
 }
 
 type DatabaseConfig struct {
@@ -123,6 +141,7 @@ func Load() *Config {
 			Gorm:     getBool("AG_DEBUG_GORM", yamlCfg.Debug.Gorm),
 			Provider: getBool("AG_DEBUG_PROVIDER", yamlCfg.Debug.Provider),
 			MCP:      getBool("AG_DEBUG_MCP", yamlCfg.Debug.MCP),
+			LogFile:  getEnv("AG_DEBUG_LOG_FILE", yamlCfg.Debug.LogFile),
 		},
 		Server: ServerConfig{
 			Port:            getInt("AG_SERVER_PORT", yamlCfg.Server.Port),
@@ -159,6 +178,17 @@ func Load() *Config {
 		},
 		Pprof: PprofConfig{
 			Port: getInt("AG_PPROF_PORT", yamlCfg.Pprof.Port),
+		},
+		Monitor: MonitorConfig{
+			Prometheus: MonitorPrometheusConfig{
+				Enabled:      getBool("AG_MONITOR_PROMETHEUS_ENABLED", yamlCfg.Monitor.Prometheus.Enabled),
+				MetricsToken: getEnv("AG_MONITOR_PROMETHEUS_METRICS_TOKEN", yamlCfg.Monitor.Prometheus.MetricsToken),
+			},
+			Otel: MonitorOtelConfig{
+				Enabled:     getBool("AG_MONITOR_OTEL_ENABLED", yamlCfg.Monitor.Otel.Enabled),
+				Endpoint:    getEnv("AG_MONITOR_OTEL_ENDPOINT", yamlCfg.Monitor.Otel.Endpoint),
+				ServiceName: getEnv("AG_MONITOR_OTEL_SERVICE_NAME", yamlCfg.Monitor.Otel.ServiceName),
+			},
 		},
 	}
 
@@ -312,6 +342,9 @@ func logConfig() {
 	log.Printf("  Debug Gorm: %v", cfg.Debug.Gorm)
 	log.Printf("  Debug Provider: %v", cfg.Debug.Provider)
 	log.Printf("  Debug MCP: %v", cfg.Debug.MCP)
+	if cfg.Debug.LogFile != "" {
+		log.Printf("  Debug LogFile: %s", cfg.Debug.LogFile)
+	}
 	log.Printf("  Server Port: %d", cfg.Server.Port)
 	log.Printf("  Trusted Proxies: %v", cfg.Server.TrustedProxies)
 	log.Printf("  Database Type: %s", cfg.Database.Type)
@@ -333,6 +366,15 @@ func logConfig() {
 	log.Printf("  Admin Username: %s", cfg.Auth.DefaultAdmin.Username)
 	log.Printf("  Admin Password: %s", maskPassword(cfg.Auth.DefaultAdmin.Password))
 	log.Printf("  Pprof Port: %d", cfg.Pprof.Port)
+	log.Printf("  Monitor Prometheus: %v", cfg.Monitor.Prometheus.Enabled)
+	if cfg.Monitor.Prometheus.Enabled {
+		log.Printf("  Monitor Prometheus Token: %s", maskPassword(cfg.Monitor.Prometheus.MetricsToken))
+	}
+	log.Printf("  Monitor OpenTelemetry: %v", cfg.Monitor.Otel.Enabled)
+	if cfg.Monitor.Otel.Enabled {
+		log.Printf("  Monitor OTel Endpoint: %s", cfg.Monitor.Otel.Endpoint)
+		log.Printf("  Monitor OTel ServiceName: %s", cfg.Monitor.Otel.ServiceName)
+	}
 }
 
 func maskPassword(p string) string {
@@ -345,7 +387,7 @@ func maskPassword(p string) string {
 func (c *Config) DSN() string {
 	switch c.Database.Type {
 	case "postgres":
-		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s",
+		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 			c.Database.Host, c.Database.Port, c.Database.Username, c.Database.Password, c.Database.DBName)
 	case "sqlite":
 		return fmt.Sprintf("%s?_loc=auto", c.Database.Path)

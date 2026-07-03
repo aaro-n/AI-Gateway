@@ -41,7 +41,7 @@ func (r *ModelRouter) Route(name string) (*RouteResult, error) {
 
 	for _, mapping := range mappings {
 		providerInfo := mapping.Provider
-		if !providerInfo.Enabled {
+		if providerInfo == nil || !providerInfo.Enabled {
 			continue
 		}
 

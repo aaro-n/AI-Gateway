@@ -62,7 +62,7 @@ func NewProviderHandler() *ProviderHandler {
 
 func (h *ProviderHandler) List(c *gin.Context) {
 	var providers []model.Provider
-	if err := model.DB.Preload("Models").Find(&providers).Error; err != nil {
+	if err := model.DB.Preload("Models").Order("name ASC").Find(&providers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

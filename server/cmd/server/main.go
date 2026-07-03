@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"ai-gateway/internal/config"
 	coreHandler "ai-gateway/internal/core/handler"
@@ -17,6 +21,8 @@ import (
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/monitor"
+	"ai-gateway/internal/telemetry"
 	"ai-gateway/res"
 
 	// 错误日志（终端输出）
@@ -40,6 +46,48 @@ func main() {
 	cfg := config.Load()
 
 	log.Printf("AI Gateway %s", res.Version)
+
+	// ── 日志文件输出 ──
+	if cfg.Debug.LogFile != "" {
+		f, err := os.OpenFile(cfg.Debug.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Printf("[Log] Warning: cannot open log file %s: %v (falling back to stdout)", cfg.Debug.LogFile, err)
+		} else {
+			coreErrors.SetOutput(f)
+			log.Printf("[Log] Writing logs to %s", cfg.Debug.LogFile)
+		}
+	}
+
+	// ── OpenTelemetry 初始化 ──
+	ctx := context.Background()
+	otelProviders, err := telemetry.InitOpenTelemetry(ctx, telemetry.Config{
+		Enabled:     cfg.Monitor.Otel.Enabled,
+		Endpoint:    cfg.Monitor.Otel.Endpoint,
+		ServiceName: cfg.Monitor.Otel.ServiceName,
+	})
+	if err != nil {
+		log.Fatalf("Failed to init OpenTelemetry: %v", err)
+	}
+	if otelProviders != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := telemetry.Shutdown(shutdownCtx, otelProviders); err != nil {
+				log.Printf("[OTel] Shutdown error: %v", err)
+			}
+		}()
+		log.Printf("[OTel] OpenTelemetry initialized, endpoint=%s", cfg.Monitor.Otel.Endpoint)
+	}
+
+	// ── 监控初始化 (Prometheus / OpenTelemetry 指标) ──
+	if cfg.Monitor.Prometheus.Enabled || cfg.Monitor.Otel.Enabled {
+		if err := monitor.InitMonitoring(monitor.Config{
+			EnablePrometheus: cfg.Monitor.Prometheus.Enabled,
+			EnableOtel:       cfg.Monitor.Otel.Enabled,
+		}); err != nil {
+			log.Fatalf("Failed to init monitoring: %v", err)
+		}
+	}
 
 	if err := model.InitDB(
 		cfg.Database.Type,
@@ -78,7 +126,16 @@ func main() {
 	}
 
 	r.Use(middleware.CORS())
+	r.Use(middleware.TraceID()) // 请求级 Trace ID（第一个中间件，后续都需要）
 	r.Use(middleware.RequestLogger())
+
+	// ── 可观测性中间件 ──
+	if otelProviders != nil {
+		r.Use(otelgin.Middleware(cfg.Monitor.Otel.ServiceName))
+	}
+	if cfg.Monitor.Prometheus.Enabled {
+		r.Use(middleware.PrometheusMiddleware())
+	}
 
 	r.Use(middleware.SetupSessionStore(
 		cfg.Server.Session.Secret,
@@ -249,6 +306,15 @@ func main() {
 			protected.GET("/protocols/compare/:protocol", protocolCompareHandler.GetProtocolCaps)
 			protected.GET("/protocols/compare-between/:from/:to", protocolCompareHandler.Compare)
 			protected.GET("/protocols/compare-all", protocolCompareHandler.CompareAll)
+			// ── Prometheus Metrics 端点 ──
+			if cfg.Monitor.Prometheus.Enabled {
+				if token := cfg.Monitor.Prometheus.MetricsToken; token != "" {
+					r.GET("/metrics", middleware.MetricsAuth(token), gin.WrapH(promhttp.Handler()))
+				} else {
+					r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+				}
+				log.Printf("[Metrics] Prometheus metrics endpoint: /metrics")
+			}
 
 		}
 	}

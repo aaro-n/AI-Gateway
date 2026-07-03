@@ -361,28 +361,14 @@ const providerLabels: Record<string, { label: string; type: string }> = {
 }
 
 const keyProtocolLabel = computed(() => {
-  if (!key.value?.formats || !key.value?.key) return ''
-  const rawKey = key.value.key
-  // 按密钥前缀判断主协议格式
-  if (rawKey.startsWith('sk-or-')) return 'OpenRouter'
-  if (rawKey.startsWith('sk-ant-')) return 'Anthropic'
-  if (rawKey.startsWith('AIza')) return 'Gemini'
-  if (rawKey.startsWith('sk-')) return 'OpenAI'
-  // fallback: 取第一个格式
-  const fmtKeys = Object.keys(key.value.formats)
-  const fmt = fmtKeys[0]
-  if (!fmt) return ''
-  return providerLabels[fmt]?.label || fmt.toUpperCase()
+  // 直接读取后端返回的 format 字段
+  if (!key.value?.format) return ''
+  return providerLabels[key.value.format]?.label || key.value.format.toUpperCase()
 })
 
 const keyProtocolType = computed((): 'success' | 'primary' | 'warning' | 'danger' | 'info' => {
-  if (!key.value?.key) return 'info'
-  const rawKey = key.value.key
-  if (rawKey.startsWith('sk-or-')) return 'info'
-  if (rawKey.startsWith('sk-ant-')) return 'primary'
-  if (rawKey.startsWith('AIza')) return 'warning'
-  if (rawKey.startsWith('sk-')) return 'success'
-  return 'info'
+  if (!key.value?.format) return 'info'
+  return (providerLabels[key.value.format]?.type || 'info') as any
 })
 
 const models = ref<any[]>([])

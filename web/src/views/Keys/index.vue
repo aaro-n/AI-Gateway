@@ -244,25 +244,14 @@ const providerLabels: Record<string, { label: string; type: string }> = {
 }
 
 function getKeyProviderLabel(row: any): string {
-  const rawKey = row.key || ''
-  if (rawKey.startsWith('sk-or-')) return 'OpenRouter'
-  if (rawKey.startsWith('sk-ant-')) return 'Anthropic'
-  if (rawKey.startsWith('AIza')) return 'Gemini'
-  if (rawKey.startsWith('sk-')) return 'OpenAI'
-  // fallback
-  const fmtKeys = row.formats ? Object.keys(row.formats) : []
-  const fmt = fmtKeys[0]
-  if (!fmt) return ''
-  return providerLabels[fmt]?.label || fmt.toUpperCase()
+  // 直接读取后端返回的 format 字段（用户创建时选择的格式）
+  if (!row.format) return ''
+  return providerLabels[row.format]?.label || row.format.toUpperCase()
 }
 
 function getKeyProviderType(row: any): string {
-  const rawKey = row.key || ''
-  if (rawKey.startsWith('sk-or-')) return 'info'
-  if (rawKey.startsWith('sk-ant-')) return 'primary'
-  if (rawKey.startsWith('AIza')) return 'warning'
-  if (rawKey.startsWith('sk-')) return 'success'
-  return 'info'
+  if (!row.format) return 'info'
+  return providerLabels[row.format]?.type || 'info'
 }
 
 async function toggleEnabled(row: any) {

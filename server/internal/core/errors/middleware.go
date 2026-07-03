@@ -22,7 +22,7 @@ func GinRecovery() gin.HandlerFunc {
 	}
 }
 
-// GinErrorReporter 自动上报 4xx/5xx 到终端日志
+// GinErrorReporter 自动上报 4xx/5xx 到日志（带 Trace ID）
 func GinErrorReporter() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
@@ -32,6 +32,7 @@ func GinErrorReporter() gin.HandlerFunc {
 			return
 		}
 
+		traceID := c.GetString("trace_id")
 		errs := c.Errors
 		detail := ""
 		if len(errs) > 0 {
@@ -43,12 +44,12 @@ func GinErrorReporter() gin.HandlerFunc {
 		ip := c.ClientIP()
 
 		if status >= 500 {
-			Error("[%d] %s %s | %s | %s", status, method, path, ip, detail)
+			TraceError(traceID, "[%d] %s %s | %s | %s", status, method, path, ip, detail)
 		} else if status == 404 {
-			// 404 降为 DEBUG，太多噪音
-			Debug("[%d] %s %s | %s", status, method, path, ip)
+			// 404 降级为 DEBUG
+			TraceDebug(traceID, "[%d] %s %s | %s", status, method, path, ip)
 		} else {
-			Warn("[%d] %s %s | %s | %s", status, method, path, ip, detail)
+			TraceWarn(traceID, "[%d] %s %s | %s | %s", status, method, path, ip, detail)
 		}
 	}
 }

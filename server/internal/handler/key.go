@@ -48,6 +48,7 @@ type keyResponse struct {
 	AccessMode string             `json:"access_mode"`
 	ExpiresAt  *time.Time         `json:"expires_at"`
 	CreatedAt  time.Time          `json:"created_at"`
+	Format     string             `json:"format"` // 用户选择的主格式（openai/anthropic/gemini/deepseek/openrouter）
 	Models     []keyModelResponse `json:"models,omitempty"`
 	Formats    map[string]string  `json:"formats,omitempty"`
 }
@@ -167,12 +168,33 @@ type keyListItemResponse struct {
 	MCPToolsCount     int                `json:"mcp_tools_count"`
 	MCPResourcesCount int                `json:"mcp_resources_count"`
 	MCPPromptsCount   int                `json:"mcp_prompts_count"`
+	Format            string             `json:"format"` // 主格式
 	Formats           map[string]string  `json:"formats,omitempty"`
+}
+
+// getPrimaryFormat 从 formats map 中提取主格式。
+// 创建密钥时，非 openai 格式会同时创建 openai 兼容格式，
+// 因此主格式 = 第一个非 openai 键；若只有 openai 则为 openai。
+func getPrimaryFormat(formats map[string]string) string {
+	if len(formats) == 0 {
+		return ""
+	}
+	// 如果有 openrouter，优先返回
+	if _, ok := formats["openrouter"]; ok {
+		return "openrouter"
+	}
+	// 找到第一个非 openai 的格式
+	for k := range formats {
+		if k != "openai" {
+			return k
+		}
+	}
+	return "openai"
 }
 
 func (h *KeyHandler) List(c *gin.Context) {
 	var keys []model.Key
-	if err := model.DB.Preload("Models.Model").Preload("Formats").Find(&keys).Error; err != nil {
+	if err := model.DB.Preload("Models.Model").Preload("Formats").Order("name ASC").Find(&keys).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -220,6 +242,7 @@ func (h *KeyHandler) List(c *gin.Context) {
 			ExpiresAt:         k.ExpiresAt,
 			CreatedAt:         k.CreatedAt,
 			Slug:              k.Slug,
+			Format:            getPrimaryFormat(formats),
 			Models:            models,
 			MCPToolsCount:     int(mcpToolsCount),
 			MCPResourcesCount: int(mcpResourcesCount),
@@ -321,6 +344,7 @@ func (h *KeyHandler) Create(c *gin.Context) {
 			AccessMode: key.AccessMode,
 			ExpiresAt:  key.ExpiresAt,
 			CreatedAt:  key.CreatedAt,
+			Format:     getPrimaryFormat(formats),
 			Models:     models,
 			Formats:    formats,
 		},
@@ -408,7 +432,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		}
 	}
 
-	model.DB.Preload("Models.Model").First(&key, id)
+	model.DB.Preload("Models.Model").Preload("Formats").First(&key, id)
 
 	models := make([]keyModelResponse, len(key.Models))
 	for j, m := range key.Models {
@@ -423,6 +447,11 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		}
 	}
 
+	updateFormats := make(map[string]string)
+	for _, f := range key.Formats {
+		updateFormats[f.Format] = f.FormattedKey
+	}
+
 	c.JSON(http.StatusOK, gin.H{"key": keyResponse{
 		ID:         key.ID,
 		Slug:       key.Slug,
@@ -432,6 +461,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		AccessMode: key.AccessMode,
 		ExpiresAt:  key.ExpiresAt,
 		CreatedAt:  key.CreatedAt,
+		Format:     getPrimaryFormat(updateFormats),
 		Models:     models,
 	}})
 }
@@ -1045,6 +1075,7 @@ func (h *KeyHandler) Get(c *gin.Context) {
 			Enabled:   key.Enabled,
 			ExpiresAt: key.ExpiresAt,
 			CreatedAt: key.CreatedAt,
+			Format:    getPrimaryFormat(formats),
 			Formats:   formats,
 		},
 	})
@@ -1133,6 +1164,7 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 			AccessMode: key.AccessMode,
 			ExpiresAt:  key.ExpiresAt,
 			CreatedAt:  key.CreatedAt,
+			Format:     getPrimaryFormat(formats),
 			Models:     models,
 			Formats:    maskedFormats,
 		},

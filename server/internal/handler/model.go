@@ -90,7 +90,7 @@ func NewModelHandler() *ModelHandler {
 
 func (h *ModelHandler) List(c *gin.Context) {
 	var models []model.Model
-	if err := model.DB.Find(&models).Error; err != nil {
+	if err := model.DB.Order("name ASC").Find(&models).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -192,7 +192,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{"model": modelResponse{
 		ID:           m.ID,
-		Slug:      m.Slug,
+		Slug:         m.Slug,
 		Model:        m.Name,
 		Enabled:      m.Enabled,
 		MappingCount: 0,

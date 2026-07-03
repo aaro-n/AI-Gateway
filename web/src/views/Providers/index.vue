@@ -215,6 +215,12 @@ function onTypeChange(val: string) {
   const selected = protocolMeta.value.find(p => p.name === val)
   if (selected) {
     form.base_url = selected.default_base_url
+    // 清除所有类型的 base_url，避免切换时残留旧类型的 URL
+    form.openai_base_url = ''
+    form.anthropic_base_url = ''
+    form.gemini_base_url = ''
+    form.deepseek_base_url = ''
+    form.openrouter_base_url = ''
     mapBaseUrls()
   }
 }

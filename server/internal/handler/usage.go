@@ -30,8 +30,10 @@ func NewUsageHandler() *UsageHandler {
 
 func (h *UsageHandler) Dashboard(c *gin.Context) {
 	nDays := 7
-	nDaysAgo := time.Now().AddDate(0, 0, -nDays).Format("2006-01-02")
-	lastNDays := generateLastNDays(nDays)
+	// 使用 UTC 计算边界，与 SQLite date() 函数时区一致
+	// SQLite date('2026-06-27 00:02:56+08:00') → 2026-06-26 (UTC)
+	nDaysAgo := time.Now().UTC().AddDate(0, 0, -nDays).Format("2006-01-02")
+	lastNDays := generateLastNDays(nDays + 1)
 
 	// 资产统计
 	var totalProviders int64
@@ -322,7 +324,7 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 }
 
 func generateLastNDays(n int) []string {
-	now := time.Now()
+	now := time.Now().UTC()
 	days := make([]string, n)
 	for i := 0; i < n; i++ {
 		offset := -n + 1 + i

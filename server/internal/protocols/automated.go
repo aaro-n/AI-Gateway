@@ -43,8 +43,12 @@ func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepsee
 		return convertModels(registryModels), nil
 	}
 
-	// 2. 兜底：尝试使用注册表中的默认官方端点 (DefaultBaseURL)
+	// 2. 兜底：只对用户已配置的自定义端点，尝试使用注册表中的默认官方端点 (DefaultBaseURL)
+	//    避免未配置的协议（如 Anthropic）通过 hardcoded fallback 返回错误模型列表
 	for _, ep := range endpoints {
+		if ep.baseURL == "" {
+			continue // 只 fallback 用户明确配置了的协议
+		}
 		desc, ok := registry.Get(ep.name)
 		if !ok || desc.NewProvider == nil || desc.DefaultBaseURL == "" {
 			continue

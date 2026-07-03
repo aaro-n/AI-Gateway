@@ -2,9 +2,11 @@ package errors
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -75,20 +77,52 @@ func GetLevel() Level {
 	return Level(gLevel.Load())
 }
 
-// ── 终端日志输出（所有级别都输出，受 SetLevel 控制）──
+// ── 输出目标 ──
 
 var (
-	stdoutLog = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
-	stderrLog = log.New(os.Stderr, "", log.Ldate|log.Ltime|log.Lmicroseconds)
+	logWriter  io.Writer = os.Stdout
+	stdoutLog  *log.Logger
+	stderrLog  *log.Logger
+	discardLog = log.New(io.Discard, "", 0)
 )
 
-func logf(level Level, format string, args ...interface{}) {
+func init() {
+	rebuildLoggers()
+}
+
+// SetOutput 设置日志输出目标（可传入 os.File 实现文件日志）
+func SetOutput(w io.Writer) {
+	if w == nil {
+		return
+	}
+	logWriter = w
+	rebuildLoggers()
+}
+
+func rebuildLoggers() {
+	stdoutLog = log.New(logWriter, "", 0)
+	stderrLog = log.New(logWriter, "", 0)
+}
+
+// ── 核心日志函数 ──
+
+// 内部日志格式（统一前缀）：
+//   时间戳 [级别] [traceID] 组件=xxx key=value ... 消息
+
+func logf(level Level, traceID string, format string, args ...interface{}) {
 	if level < GetLevel() {
-		return // 低于最低级别，不输出
+		return
 	}
 
 	msg := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("[%s] %s", level.String(), msg)
+	now := time.Now().Format("2006-01-02 15:04:05.000")
+
+	prefix := fmt.Sprintf("%s [%-5s]", now, level.String())
+	if traceID != "" {
+		prefix += fmt.Sprintf(" [%s]", traceID)
+	}
+
+	line := prefix + " " + msg
 
 	if level >= WARNLevel {
 		stderrLog.Println(line)
@@ -97,43 +131,105 @@ func logf(level Level, format string, args ...interface{}) {
 	}
 }
 
+// logKVs 带结构化 key=value 的日志
+// 示例: errors.DebugKVs("gateway routing", "model", "gpt-4o", "provider_model", "gpt-4o-2024", "protocol", "openai")
+func logKVs(level Level, traceID, message string, kvs ...string) {
+	if level < GetLevel() {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(message)
+
+	for i := 0; i+1 < len(kvs); i += 2 {
+		sb.WriteString(" ")
+		sb.WriteString(kvs[i])
+		sb.WriteString("=")
+		sb.WriteString(kvs[i+1])
+	}
+
+	// 如果 kvs 数量为奇数，最后一个 key 视为标签
+	if len(kvs)%2 == 1 {
+		sb.WriteString(" ")
+		sb.WriteString(kvs[len(kvs)-1])
+	}
+
+	logf(level, traceID, "%s", sb.String())
+}
+
 // ── 公开 API ──
 
 // Debug 调试信息
-// 示例: errors.Debug("incoming request: %s %s", method, path)
 func Debug(format string, args ...interface{}) {
-	logf(DEBUGLevel, format, args...)
+	logf(DEBUGLevel, "", format, args...)
+}
+
+// DebugKVs 带 key=value 的结构化调试日志
+func DebugKVs(message string, kvs ...string) {
+	logKVs(DEBUGLevel, "", message, kvs...)
 }
 
 // Info 常规信息
-// 示例: errors.Info("provider %s synced %d models", name, count)
 func Info(format string, args ...interface{}) {
-	logf(INFOLevel, format, args...)
+	logf(INFOLevel, "", format, args...)
+}
+
+// InfoKVs 带 key=value 的结构化信息日志
+func InfoKVs(message string, kvs ...string) {
+	logKVs(INFOLevel, "", message, kvs...)
 }
 
 // Warn 警告（不影响服务但需关注）
-// 示例: errors.Warn("rate limited by %s, cooldown until %s", provider, until)
 func Warn(format string, args ...interface{}) {
-	logf(WARNLevel, format, args...)
+	logf(WARNLevel, "", format, args...)
 }
 
 // Error 错误（服务受影响）
-// 示例: errors.Error("upstream %s unreachable: %v", provider, err)
 func Error(format string, args ...interface{}) {
-	logf(ERRORLevel, format, args...)
+	logf(ERRORLevel, "", format, args...)
 }
 
 // Fatal 致命错误并退出（仅用于启动阶段不可恢复错误）
-// 示例: errors.Fatal("cannot connect to database: %v", err)
 func Fatal(format string, args ...interface{}) {
-	logf(FATALLevel, format, args...)
+	logf(FATALLevel, "", format, args...)
 	os.Exit(1)
+}
+
+// ── 带 Trace ID 的日志 API（用于请求处理链路）──
+
+// TraceDebug 带 trace_id 的调试日志
+func TraceDebug(traceID, format string, args ...interface{}) {
+	logf(DEBUGLevel, traceID, format, args...)
+}
+
+// TraceDebugKVs 带 trace_id + key=value 的结构化调试日志
+func TraceDebugKVs(traceID, message string, kvs ...string) {
+	logKVs(DEBUGLevel, traceID, message, kvs...)
+}
+
+// TraceInfo 带 trace_id 的信息日志
+func TraceInfo(traceID, format string, args ...interface{}) {
+	logf(INFOLevel, traceID, format, args...)
+}
+
+// TraceInfoKVs 带 trace_id + key=value 的结构化信息日志
+func TraceInfoKVs(traceID, message string, kvs ...string) {
+	logKVs(INFOLevel, traceID, message, kvs...)
+}
+
+// TraceWarn 带 trace_id 的告警日志
+func TraceWarn(traceID, format string, args ...interface{}) {
+	logf(WARNLevel, traceID, format, args...)
+}
+
+// TraceError 带 trace_id 的错误日志
+func TraceError(traceID, format string, args ...interface{}) {
+	logf(ERRORLevel, traceID, format, args...)
 }
 
 // ── Panic 恢复 ──
 
 // Recover 必须在 defer 中调用，捕获 panic 并记录堆栈
-// 用法: defer errors.Recover()
 func Recover() {
 	if r := recover(); r != nil {
 		stack := string(debug.Stack())
@@ -148,7 +244,7 @@ func Recover() {
 			errMsg = fmt.Sprintf("%v", v)
 		}
 
-		logf(FATALLevel, "PANIC RECOVERED: %s\n%s", errMsg, stack)
+		logf(FATALLevel, "", "PANIC RECOVERED: %s\n%s", errMsg, stack)
 	}
 }
 
@@ -171,5 +267,5 @@ func RequestLog(level Level, path, method, clientIP, format string, args ...inte
 		return
 	}
 	line := fmt.Sprintf("[%s] %s | %s %s | %s", level.String(), msg, method, path, clientIP)
-	logf(level, "%s", line)
+	logf(level, "", "%s", line)
 }
