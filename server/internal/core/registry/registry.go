@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/protocols/capabilities"
 )
 
 // =============================================================================
@@ -123,6 +124,21 @@ type Outbound interface {
 }
 
 // =============================================================================
+// StreamHintProvider — 可选接口，让无法从 body 判断流式的协议提供流式提示
+//
+// 大多数协议（OpenAI/Anthropic/DeepSeek）在请求体中的 "stream" 字段指示流式模式。
+// Gemini 通过 URL 路径（"streamGenerateContent" vs "generateContent"）区分流式，
+// body 中无此信息。实现此接口可让 UnifiedGatewayHandler 在 ToUnified 之后
+// 正确设置 unifiedReq.Stream，避免协议特定的硬编码分支。
+// =============================================================================
+
+// StreamHintProvider 可选的流式提示接口
+type StreamHintProvider interface {
+	// IsStreamRequest 从 HTTP 请求判断是否为流式请求
+	IsStreamRequest(c *gin.Context) bool
+}
+
+// =============================================================================
 // 测试接口 — 每个协议必须提供
 // =============================================================================
 
@@ -160,6 +176,11 @@ type ProtocolDescriptor struct {
 	// ── 身份标识 ──
 	Name  string `json:"name"`  // 唯一标识 "openai", "anthropic", "gemini"
 	Label string `json:"label"` // 显示名称 "OpenAI", "Anthropic", "Google Gemini"
+
+	// ── 能力声明（声明式转换损失检测） ──
+	// 注册时通过 capabilities.Get(desc.Name) 自动填充。
+	// 若为 nil，跨协议损失检测退化为仅输出警告列表。
+	Capabilities *capabilities.ProtocolCaps `json:"-"`
 
 	// ── Key 格式 ──
 	KeyPrefix  string              `json:"key_prefix"` // "sk-", "sk-ant-", "AIza"

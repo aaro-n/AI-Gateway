@@ -1,10 +1,10 @@
 package deepseek
 
 import (
-	"fmt"
-	"encoding/json"
-	"strings"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // =============================================================================
@@ -34,21 +34,27 @@ func (p *DeepSeekProvider) ToUnified(body []byte, modelID string) (*unified.Requ
 	msgs := make([]unified.Message, 0, len(raw.Messages))
 	systemParts := make([]string, 0)
 	for _, rawMsg := range raw.Messages {
-		// 先解析为 map 以保留 unknown fields（如 reasoning_content / prefix）
-		var rawMap map[string]json.RawMessage
-		if err := json.Unmarshal(rawMsg, &rawMap); err != nil {
+		// 一次解析到包含 extra fields 的结构体，避免重复 Unmarshal
+		var msgWithExtras struct {
+			Role             string             `json:"role"`
+			Content          json.RawMessage    `json:"content"`
+			ReasoningContent string             `json:"reasoning_content,omitempty"`
+			Prefix           bool               `json:"prefix,omitempty"`
+			ToolCalls        []unified.ToolCall `json:"tool_calls,omitempty"`
+			ToolCallID       string             `json:"tool_call_id,omitempty"`
+			Name             string             `json:"name,omitempty"`
+		}
+		if err := json.Unmarshal(rawMsg, &msgWithExtras); err != nil {
 			return nil, fmt.Errorf("parse message: %w", err)
 		}
-		var m unified.Message
-		if err := json.Unmarshal(rawMsg, &m); err != nil {
-			return nil, fmt.Errorf("parse message: %w", err)
-		}
-		// 提取 reasoning_content（DeepSeek/o1 思维链，多轮对话须原样传回）
-		if rc, ok := rawMap["reasoning_content"]; ok {
-			var s string
-			if json.Unmarshal(rc, &s) == nil {
-				m.ReasoningContent = s
-			}
+		m := unified.Message{
+			Role:             msgWithExtras.Role,
+			Content:          msgWithExtras.Content,
+			ReasoningContent: msgWithExtras.ReasoningContent,
+			Prefix:           msgWithExtras.Prefix,
+			ToolCalls:        msgWithExtras.ToolCalls,
+			ToolCallID:       msgWithExtras.ToolCallID,
+			Name:             msgWithExtras.Name,
 		}
 		// 如果 assistant 消息的 content 中包含 <think>...</think> 标签，
 		// 剥离标签内容到 ReasoningContent（兼容标准 OpenAI 客户端回传的格式）
@@ -60,12 +66,7 @@ func (p *DeepSeekProvider) ToUnified(body []byte, modelID string) (*unified.Requ
 			}
 		}
 		// 提取 prefix（DeepSeek Chat Prefix Completion）
-		if pf, ok := rawMap["prefix"]; ok {
-			var b bool
-			if json.Unmarshal(pf, &b) == nil {
-				m.Prefix = b
-			}
-		}
+		m.Prefix = msgWithExtras.Prefix
 		if m.Role == "system" {
 			systemParts = append(systemParts, unified.ContentString(m.Content))
 			continue
@@ -101,5 +102,3 @@ func (p *DeepSeekProvider) ToUnified(body []byte, modelID string) (*unified.Requ
 	}
 	return req, nil
 }
-
-

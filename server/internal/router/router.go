@@ -135,8 +135,87 @@ func (r *ModelRouter) RouteDirect(modelID string, keyID uint) (*RouteResult, err
 	return nil, nil
 }
 
+// RouteAllDirect 返回所有候选项（按 weight 排序，跳过熔断/cooling 中的项）
+func (r *ModelRouter) RouteAllDirect(modelID string, keyID uint) ([]*RouteResult, error) {
+	r.cooldownManager.ClearExpiredCooldowns()
+
+	var allowedPMIDs []uint
+	if keyID > 0 {
+		model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ? AND enabled = ?", keyID, true).Pluck("provider_model_id", &allowedPMIDs)
+	}
+
+	query := model.DB.Preload("Provider").
+		Where("model_id = ? AND is_available = ?", modelID, true)
+	if len(allowedPMIDs) > 0 {
+		query = query.Where("id IN ?", allowedPMIDs)
+	}
+
+	var pms []model.ProviderModel
+	if err := query.Find(&pms).Error; err != nil {
+		return nil, err
+	}
+
+	var results []*RouteResult
+	for _, pm := range pms {
+		if pm.Provider == nil || !pm.Provider.Enabled {
+			continue
+		}
+		pmCopy := pm
+		result := &RouteResult{
+			Provider:      pm.Provider,
+			ProviderModel: &pmCopy,
+		}
+		if !r.cooldownManager.IsCooldown(pm.Provider.ID, pm.ID) {
+			results = append(results, result)
+		}
+	}
+	return results, nil
+}
+
+// RouteAll 返回所有启用的候选项（按 weight DESC 排序，跳过熔断/cooling 中的项）
+func (r *ModelRouter) RouteAll(name string) ([]*RouteResult, error) {
+	r.cooldownManager.ClearExpiredCooldowns()
+
+	var m model.Model
+	if err := model.DB.Where("name = ? AND enabled = ?", name, true).First(&m).Error; err != nil {
+		return nil, nil
+	}
+
+	var mappings []model.ModelMapping
+	if err := model.DB.Preload("Provider").Preload("ProviderModel").
+		Where("model_id = ? AND enabled = ?", m.ID, true).
+		Order("weight DESC").
+		Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+
+	var results []*RouteResult
+	for _, mapping := range mappings {
+		if mapping.Provider == nil || !mapping.Provider.Enabled {
+			continue
+		}
+		if mapping.ProviderModel == nil || !mapping.ProviderModel.IsAvailable {
+			continue
+		}
+
+		result := &RouteResult{
+			Provider:      mapping.Provider,
+			ProviderModel: mapping.ProviderModel,
+		}
+		if !r.cooldownManager.IsCooldown(mapping.Provider.ID, mapping.ProviderModel.ID) {
+			results = append(results, result)
+		}
+	}
+	return results, nil
+}
+
 func (r *ModelRouter) RecordRateLimit(providerID uint, providerModelID uint) {
 	r.cooldownManager.Record429(providerID, providerModelID)
+}
+
+// RecordError 记录通用上游错误（5xx, 超时等），触发熔断计数。
+func (r *ModelRouter) RecordError(providerID uint, providerModelID uint) {
+	r.cooldownManager.RecordError(providerID, providerModelID)
 }
 
 func (r *ModelRouter) RecordSuccess(providerID uint, providerModelID uint) {

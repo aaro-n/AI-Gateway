@@ -1,24 +1,25 @@
 package anthropic
 
 import (
-	"bufio"
-	"io"
-	"encoding/json"
+	"context"
+	"log"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
+
 	"ai-gateway/internal/core/reasonmap"
-	"strings"
+	"ai-gateway/internal/core/streamutil"
 	"ai-gateway/internal/core/unified"
 )
 
 // =============================================================================
-// 流式：Anthropic SSE → unified.StreamEvent chan
+// 流式：Anthropic SDK stream → unified.StreamEvent chan
 // =============================================================================
 
-func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
-	ch := make(chan unified.StreamEvent, 32)
+func (p *AnthropicProvider) streamSDKToUnified(ctx context.Context, stream *ssestream.Stream[anthropic.MessageStreamEventUnion]) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, streamutil.BufferSize)
 	go func() {
-		defer body.Close()
 		defer close(ch)
-		reader := bufio.NewReader(body)
 		var inputTokens int
 		var messageID string
 		var messageModel string
@@ -29,175 +30,128 @@ func (p *AnthropicProvider) streamAnthropicToUnified(body io.ReadCloser) <-chan 
 			toolID    string
 		}
 		blocks := make(map[int]*blockInfo) // index → block info
-		for {
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err != io.EOF {
-					ch <- unified.StreamEvent{Type: unified.EventError}
-				}
+
+		for stream.Next() {
+			// Check context before processing
+			if ctx.Err() != nil {
 				return
 			}
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			var event struct {
-				Type         string          `json:"type"`
-				Index        *int            `json:"index"`
-				Message      json.RawMessage `json:"message"`
-				Delta        json.RawMessage `json:"delta"`
-				Usage        json.RawMessage `json:"usage"`
-				ContentBlock json.RawMessage `json:"content_block"`
-			}
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				continue
-			}
+			event := stream.Current()
+			switch e := event.AsAny().(type) {
+			case anthropic.MessageStartEvent:
+				messageID = e.Message.ID
+				messageModel = string(e.Message.Model)
+				inputTokens = int(e.Message.Usage.InputTokens)
 
-			switch event.Type {
-			case "message_start":
-				if len(event.Message) > 0 {
-					var msg struct {
-						ID    string `json:"id"`
-						Model string `json:"model"`
-						Usage struct {
-							InputTokens int `json:"input_tokens"`
-						} `json:"usage"`
+			case anthropic.ContentBlockStartEvent:
+				idx := int(e.Index)
+				cb := e.ContentBlock.AsAny()
+				switch c := cb.(type) {
+				case anthropic.TextBlock:
+					blocks[idx] = &blockInfo{blockType: "text"}
+				case anthropic.ThinkingBlock:
+					blocks[idx] = &blockInfo{blockType: "thinking"}
+				case anthropic.ToolUseBlock:
+					blocks[idx] = &blockInfo{
+						blockType: "tool_use",
+						toolName:  c.Name,
+						toolID:    c.ID,
 					}
-					if json.Unmarshal(event.Message, &msg) == nil {
-						messageID = msg.ID
-						messageModel = msg.Model
-						inputTokens = msg.Usage.InputTokens
-					}
+				default:
+					blocks[idx] = &blockInfo{blockType: "unknown"}
 				}
-			case "content_block_start":
-				if event.Index != nil && len(event.ContentBlock) > 0 {
-					var cb struct {
-						Type string `json:"type"`
-						ID   string `json:"id"`
-						Name string `json:"name"`
+
+			case anthropic.ContentBlockDeltaEvent:
+				idx := int(e.Index)
+				delta := e.Delta
+				switch delta.Type {
+				case "text_delta":
+					if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
+						Type:      unified.EventChunk,
+						MessageID: messageID,
+						Model:     messageModel,
+						Delta:     &unified.Delta{Content: delta.Text},
+					}) {
+						return
 					}
-					if json.Unmarshal(event.ContentBlock, &cb) == nil {
-						blocks[*event.Index] = &blockInfo{
-							blockType: cb.Type,
-							toolName:  cb.Name,
-							toolID:    cb.ID,
+				case "thinking_delta":
+					if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
+						Type:      unified.EventChunk,
+						MessageID: messageID,
+						Model:     messageModel,
+						Delta:     &unified.Delta{ReasoningContent: delta.Thinking},
+					}) {
+						return
+					}
+				case "signature_delta":
+					if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
+						Type:      unified.EventChunk,
+						MessageID: messageID,
+						Model:     messageModel,
+						Delta:     &unified.Delta{ReasoningSignature: &delta.Signature},
+					}) {
+						return
+					}
+				case "input_json_delta":
+					toolCallID := ""
+					if bi, ok := blocks[idx]; ok && bi.blockType == "tool_use" {
+						toolCallID = bi.toolID
+					}
+					evt := unified.StreamEvent{
+						Type:      unified.EventChunk,
+						MessageID: messageID,
+						Model:     messageModel,
+						Delta:     &unified.Delta{InputJSON: delta.PartialJSON},
+					}
+					if toolCallID != "" {
+						evt.Delta.TransformerMetadata = map[string]any{
+							"tool_call_id": toolCallID,
+						}
+						if bi, ok := blocks[idx]; ok && bi.toolName != "" {
+							evt.Delta.TransformerMetadata["tool_name"] = bi.toolName
 						}
 					}
-				}
-			case "content_block_delta":
-				idx := -1
-				if event.Index != nil {
-					idx = *event.Index
-				}
-				if len(event.Delta) > 0 {
-					var delta struct {
-						Type        string `json:"type"`
-						Text        string `json:"text"`
-						Thinking    string `json:"thinking"`
-						Signature   string `json:"signature"`
-						PartialJSON string `json:"partial_json"`
-					}
-					if json.Unmarshal(event.Delta, &delta) == nil {
-						switch delta.Type {
-						case "text_delta":
-							ch <- unified.StreamEvent{
-								Type:      unified.EventChunk,
-								MessageID: messageID,
-								Model:     messageModel,
-								Delta: &unified.Delta{
-									Content: delta.Text,
-								},
-							}
-						case "thinking_delta":
-							ch <- unified.StreamEvent{
-								Type:      unified.EventChunk,
-								MessageID: messageID,
-								Model:     messageModel,
-								Delta: &unified.Delta{
-									ReasoningContent: delta.Thinking,
-								},
-							}
-						case "signature_delta":
-							ch <- unified.StreamEvent{
-								Type:      unified.EventChunk,
-								MessageID: messageID,
-								Model:     messageModel,
-								Delta: &unified.Delta{
-									ReasoningSignature: &delta.Signature,
-								},
-							}
-						case "input_json_delta":
-							// 从 content_block_start 获取 tool name/ID
-							toolCallID := ""
-							if bi, ok := blocks[idx]; ok && bi.blockType == "tool_use" {
-								toolCallID = bi.toolID
-							}
-							evt := unified.StreamEvent{
-								Type:      unified.EventChunk,
-								MessageID: messageID,
-								Model:     messageModel,
-								Delta: &unified.Delta{
-									InputJSON: delta.PartialJSON,
-								},
-							}
-							if toolCallID != "" {
-								evt.Delta.TransformerMetadata = map[string]any{
-									"tool_call_id": toolCallID,
-								}
-								// 也将 tool name 传到第一个 tool_call slot
-								if bi, ok := blocks[idx]; ok && bi.toolName != "" {
-									evt.Delta.TransformerMetadata["tool_name"] = bi.toolName
-								}
-							}
-							ch <- evt
-						}
-					}
-				}
-			case "message_delta":
-				if len(event.Usage) > 0 {
-					var u struct {
-						OutputTokens int `json:"output_tokens"`
-					}
-					if json.Unmarshal(event.Usage, &u) == nil {
-						ch <- unified.StreamEvent{
-							Type:      unified.EventUsage,
-							MessageID: messageID,
-							Model:     messageModel,
-							Usage: &unified.Usage{
-								InputTokens:  inputTokens,
-								OutputTokens: u.OutputTokens,
-							},
-						}
-					}
-				}
-				// message_delta 也包含 stop_reason
-				if len(event.Delta) > 0 {
-					var md struct {
-						StopReason string `json:"stop_reason"`
-					}
-					if json.Unmarshal(event.Delta, &md) == nil {
-						ch <- unified.StreamEvent{
-							Type:         unified.EventDone,
-							MessageID:    messageID,
-							Model:        messageModel,
-							FinishReason: reasonmap.AnthropicToUnified(md.StopReason),
-						}
+					if !streamutil.SendEvent(ctx, ch, evt) {
 						return
 					}
 				}
-			case "message_stop":
-				ch <- unified.StreamEvent{
+
+			case anthropic.MessageDeltaEvent:
+				if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
+					Type:      unified.EventUsage,
+					MessageID: messageID,
+					Model:     messageModel,
+					Usage: &unified.Usage{
+						InputTokens:     inputTokens,
+						OutputTokens:    int(e.Usage.OutputTokens),
+						CacheHitTokens:  int(e.Usage.CacheReadInputTokens),
+						CacheMissTokens: int(e.Usage.CacheCreationInputTokens),
+					},
+				}) {
+					return
+				}
+				streamutil.SendEvent(ctx, ch, unified.StreamEvent{
+					Type:         unified.EventDone,
+					MessageID:    messageID,
+					Model:        messageModel,
+					FinishReason: reasonmap.AnthropicToUnified(string(e.Delta.StopReason)),
+				})
+				return
+
+			case anthropic.MessageStopEvent:
+				streamutil.SendEvent(ctx, ch, unified.StreamEvent{
 					Type:         unified.EventDone,
 					MessageID:    messageID,
 					Model:        messageModel,
 					FinishReason: unified.FinishReasonStop,
-				}
+				})
 				return
 			}
+		}
+		if err := stream.Err(); err != nil {
+			log.Printf("[Anthropic SDK stream] error: %v", err)
+			streamutil.SendEvent(ctx, ch, unified.StreamEvent{Type: unified.EventError})
 		}
 	}()
 	return ch
 }
-
-

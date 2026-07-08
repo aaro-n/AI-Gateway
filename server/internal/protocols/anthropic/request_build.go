@@ -1,13 +1,11 @@
 package anthropic
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -15,6 +13,7 @@ import (
 
 	"ai-gateway/internal/core/reasonmap"
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/toolnamesafe"
 	"ai-gateway/internal/core/unified"
 )
 
@@ -38,32 +37,21 @@ func (p *AnthropicProvider) FromUnified(req *unified.Request) (*unified.Response
 		return uresp, nil, nil
 	}
 
-	// 流式：仍用手写 SSE 解析（SDK 的 NewStreaming 需要类型化 params），但用共享 httpClient
-	body, err := json.Marshal(anthropicReq)
+	// 流式：使用 SDK Messages.NewStreaming() → 类型安全的 SSE 解析
+	ctx := req.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	paramsBytes, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	httpReq, err := http.NewRequest("POST", p.cfg.BaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, nil, err
+	var params anthropic.MessageNewParams
+	if err := json.Unmarshal(paramsBytes, &params); err != nil {
+		return nil, nil, fmt.Errorf("anthropic: convert to SDK params: %w", err)
 	}
-	httpReq.Header.Set("x-api-key", p.cfg.APIKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.httpPool.Do(httpReq)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, nil, &registry.HTTPError{StatusCode: resp.StatusCode, Body: respBody}
-	}
-
-	events := p.streamAnthropicToUnified(resp.Body)
+	stream := p.sdk.Messages.NewStreaming(ctx, params)
+	events := p.streamSDKToUnified(ctx, stream)
 	return nil, events, nil
 }
 
@@ -73,8 +61,10 @@ func sdkMessageToUnified(msg *anthropic.Message) *unified.Response {
 		ID:    msg.ID,
 		Model: string(msg.Model),
 		Usage: unified.Usage{
-			InputTokens:  int(msg.Usage.InputTokens),
-			OutputTokens: int(msg.Usage.OutputTokens),
+			InputTokens:     int(msg.Usage.InputTokens),
+			OutputTokens:    int(msg.Usage.OutputTokens),
+			CacheHitTokens:  int(msg.Usage.CacheReadInputTokens),
+			CacheMissTokens: int(msg.Usage.CacheCreationInputTokens),
 		},
 	}
 
@@ -263,9 +253,10 @@ func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]
 		if err := json.Unmarshal(req.Tools, &unifiedTools); err == nil {
 			tools := make([]map[string]interface{}, 0, len(unifiedTools))
 			for _, t := range unifiedTools {
-				if t.Function.Name != "" {
+				name := toolnamesafe.SanitizeAnthropicToolName(t.Function.Name)
+				if name != "" {
 					tools = append(tools, map[string]interface{}{
-						"name":         t.Function.Name,
+						"name":         name,
 						"description":  t.Function.Description,
 						"input_schema": t.Function.Parameters,
 					})
@@ -341,4 +332,20 @@ func parseDataURL(url string) (mediaType, data string) {
 		}
 	}
 	return
+}
+
+// anthropicBetaHeader 根据模型名返回需要的 anthropic-beta header 值。
+// 参考 one-api: relay/adaptor/anthropic/constants.go
+func anthropicBetaHeader(model string) string {
+	lower := strings.ToLower(model)
+	switch {
+	case strings.Contains(lower, "claude-4-sonnet"):
+		return "context-1m-2025-08-07"
+	case strings.Contains(lower, "claude-4"):
+		return "interleaved-thinking-2025-05-14"
+	case strings.Contains(lower, "claude-3-7"):
+		return "output-128k-2025-02-19"
+	default:
+		return ""
+	}
 }

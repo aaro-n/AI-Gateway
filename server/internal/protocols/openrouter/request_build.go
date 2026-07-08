@@ -4,6 +4,7 @@ import (
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -41,7 +42,11 @@ func (p *OpenRouterProvider) FromUnified(req *unified.Request) (*unified.Respons
 	}
 
 	if req.Stream {
-		events := p.streamOpenRouterToUnified(resp.Body)
+		ctx := req.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		events := p.streamOpenRouterToUnified(ctx, resp.Body)
 		return nil, events, nil
 	}
 	defer resp.Body.Close()

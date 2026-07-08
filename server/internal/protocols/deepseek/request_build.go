@@ -4,6 +4,7 @@ import (
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,7 +21,11 @@ func (p *DeepSeekProvider) FromUnified(req *unified.Request) (*unified.Response,
 		return nil, nil, err
 	}
 
-	httpReq, err := http.NewRequest("POST", p.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	ctx := req.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -39,7 +44,7 @@ func (p *DeepSeekProvider) FromUnified(req *unified.Request) (*unified.Response,
 	}
 
 	if req.Stream {
-		events := p.streamDeepSeekToUnified(resp.Body)
+		events := p.streamDeepSeekToUnified(ctx, resp.Body)
 		return nil, events, nil
 	}
 	defer resp.Body.Close()

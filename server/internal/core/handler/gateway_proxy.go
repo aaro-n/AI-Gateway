@@ -137,7 +137,14 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		"is_direct", fmt.Sprintf("%v", isDirectCall),
 		"base_url", result.Provider.OpenAIBaseURL)
 
-	// 5.1 重复检查（双保险）：该 key 的直通白名单与映射白名单不应有相同 model_id
+	// 5.1 获取所有候选项（用于 failover）
+	allResults, isDirectCall, err := h.routeAll(apiKey, modelName)
+	if err != nil || len(allResults) == 0 {
+		// 回退到单路由
+		allResults = []*router.RouteResult{result}
+	}
+
+	// 5.2 重复检查（双保险）
 	if conflict := h.checkKeyConflict(apiKey.ID); conflict != "" {
 		coreErrors.TraceError(traceID, "key_model_conflict key_id=%d conflict=%s", apiKey.ID, conflict)
 		c.JSON(http.StatusForbidden, gin.H{"error": "API key has model ID conflict: " + conflict})
@@ -162,15 +169,18 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		return
 	}
 	unifiedReq.SourceProtocol = protocolName
+	unifiedReq.Ctx = c.Request.Context()
 
 	coreErrors.TraceDebugKVs(traceID, "to_unified_done",
 		"stream", fmt.Sprintf("%v", unifiedReq.Stream),
 		"has_tools", fmt.Sprintf("%v", len(unifiedReq.Tools) > 0))
 
-	// Gemini Stream 检测（Gemini 通过 URL 区分流式，body 中无 Stream 字段）
-	if protocolName == "gemini" && strings.Contains(c.Request.URL.Path, "streamGenerateContent") {
-		unifiedReq.Stream = true
-		coreErrors.TraceDebug(traceID, "gemini_stream_detected via URL")
+	// 协议特定的流式检测（Gemini 通过 URL 区分流式，body 中无 stream 字段）
+	if hintProv, ok := entryProv.(registry.StreamHintProvider); ok {
+		if hintProv.IsStreamRequest(c) {
+			unifiedReq.Stream = true
+			coreErrors.TraceDebug(traceID, "stream_detected via StreamHintProvider for protocol=%s", protocolName)
+		}
 	}
 
 	// 8. 选择上游协议并执行
@@ -183,28 +193,49 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 		c.Request.URL.Path = strings.TrimPrefix(originalPath, prefix)
 	}
 
+	// 8. Failover 循环：逐一尝试候选项
+	var upstreamProtocol string
+	var execErr error
+	var usage registry.Usage
+
 	start := time.Now()
-	usage := registry.Usage{}
-	upstreamProtocol, execErr := h.execute(c, unifiedReq, result, &usage, isDirectCall)
-
-	c.Request.URL.Path = originalPath
-	latencyMs := time.Since(start).Milliseconds()
-
-	// 9. 冷却管理
 	status := "success"
 	errMsg := ""
+	finalResult := allResults[0]
+
+	for i, cand := range allResults {
+		if i > 0 {
+			coreErrors.TraceWarn(traceID, "failover_retry attempt=%d provider=%s model=%s",
+				i, cand.Provider.Name, cand.ProviderModel.ModelID)
+			// 重置 usage（每个候选项独立计数）
+			usage = registry.Usage{}
+		}
+
+		upstreamProtocol, execErr = h.execute(c, unifiedReq, cand, &usage, isDirectCall)
+		if execErr == nil {
+			finalResult = cand
+			h.modelRouter.RecordSuccess(cand.Provider.ID, cand.ProviderModel.ID)
+			break
+		}
+
+		// 记录错误到熔断器
+		if httpErr, ok := execErr.(*registry.HTTPError); ok && httpErr.IsRateLimit() {
+			h.modelRouter.RecordRateLimit(cand.Provider.ID, cand.ProviderModel.ID)
+			coreErrors.TraceWarn(traceID, "rate_limited provider=%s model=%s", cand.Provider.Name, cand.ProviderModel.ModelID)
+		} else {
+			h.modelRouter.RecordError(cand.Provider.ID, cand.ProviderModel.ID)
+		}
+		coreErrors.TraceError(traceID, "upstream_failed upstream=%s model=%s provider_model=%s err=%s",
+			upstreamProtocol, modelName, cand.ProviderModel.ModelID, execErr.Error())
+	}
+
 	if execErr != nil {
 		status = "error"
 		errMsg = execErr.Error()
-		if httpErr, ok := execErr.(*registry.HTTPError); ok && httpErr.IsRateLimit() {
-			h.modelRouter.RecordRateLimit(result.Provider.ID, result.ProviderModel.ID)
-			coreErrors.TraceWarn(traceID, "rate_limited provider=%s model=%s", result.Provider.Name, result.ProviderModel.ModelID)
-		}
-		coreErrors.TraceError(traceID, "upstream_failed upstream=%s model=%s provider_model=%s latency_ms=%d err=%s",
-			upstreamProtocol, modelName, result.ProviderModel.ModelID, latencyMs, errMsg)
-	} else {
-		h.modelRouter.RecordSuccess(result.Provider.ID, result.ProviderModel.ID)
 	}
+
+	c.Request.URL.Path = originalPath
+	latencyMs := time.Since(start).Milliseconds()
 
 	// 10. 日志
 	matched := upstreamProtocol == protocolName
@@ -217,12 +248,12 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	}
 	modelLog := h.newModelLog(
 		protocolName, clientIPs, apiKey.ID, apiKey.Name, modelName,
-		result, matched, &usage, int(latencyMs), status, errMsg, convStatusStr,
+		finalResult, matched, &usage, int(latencyMs), status, errMsg, convStatusStr,
 	)
 	model.DB.Create(modelLog)
 
 	// ── 指标记录 (Prometheus / OpenTelemetry) ──
-	monitor.GlobalRecorder.RecordRelayRequest(start, modelName, result.ProviderModel.ModelID,
+	monitor.GlobalRecorder.RecordRelayRequest(start, modelName, finalResult.ProviderModel.ModelID,
 		protocolName, upstreamProtocol, execErr == nil,
 		usage.InputTokens, usage.OutputTokens, usage.CachedTokens)
 
@@ -232,8 +263,8 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 			"entry_protocol", protocolName,
 			"upstream_protocol", upstreamProtocol,
 			"model", modelName,
-			"provider_model", result.ProviderModel.ModelID,
-			"provider", result.Provider.Name,
+			"provider_model", finalResult.ProviderModel.ModelID,
+			"provider", finalResult.Provider.Name,
 			"call_type", callType,
 			"tokens", fmt.Sprintf("%d", usage.TotalTokens()),
 			"latency_ms", fmt.Sprintf("%d", latencyMs),
@@ -242,7 +273,7 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 			"conv_status", convStatusStr)
 	} else {
 		coreErrors.TraceError(traceID, "gateway_failed entry=%s upstream=%s model=%s provider=%s call_type=%s conv_status=%s err=%s latency_ms=%d",
-			protocolName, upstreamProtocol, modelName, result.Provider.Name,
+			protocolName, upstreamProtocol, modelName, finalResult.Provider.Name,
 			callType, convStatusStr, errMsg, latencyMs)
 	}
 }
@@ -277,6 +308,45 @@ func (h *UnifiedGatewayHandler) route(apiKey model.Key, modelName string) (*rout
 		return nil, false, err
 	}
 	return mappedResult, false, nil
+}
+
+// routeAll 返回所有候选项，用于 failover 循环
+func (h *UnifiedGatewayHandler) routeAll(apiKey model.Key, modelName string) ([]*router.RouteResult, bool, error) {
+	if apiKey.AccessMode == "direct" {
+		results, err := h.modelRouter.RouteAllDirect(modelName, apiKey.ID)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(results) > 0 {
+			return results, true, nil
+		}
+		return nil, false, fmt.Errorf("direct model not found: %s", modelName)
+	}
+
+	if apiKey.AccessMode == "hybrid" {
+		directResults, _ := h.modelRouter.RouteAllDirect(modelName, apiKey.ID)
+		mappedResults, _ := h.modelRouter.RouteAll(modelName)
+		results := make([]*router.RouteResult, 0, len(directResults)+len(mappedResults))
+		for _, r := range directResults {
+			results = append(results, r)
+		}
+		for _, r := range mappedResults {
+			results = append(results, r)
+		}
+		if len(results) > 0 {
+			// 确定首选项类型
+			_, isDirect, _ := h.route(apiKey, modelName)
+			return results, isDirect, nil
+		}
+		return nil, false, fmt.Errorf("no available provider for model: %s", modelName)
+	}
+
+	// mapping mode
+	results, err := h.modelRouter.RouteAll(modelName)
+	if err != nil {
+		return nil, false, err
+	}
+	return results, false, nil
 }
 
 // checkKeyConflict 检查该 key 的直通白名单与映射白名单是否有 model_id 重复。
@@ -363,17 +433,36 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 		"is_conversion", fmt.Sprintf("%v", upstreamProto != req.SourceProtocol),
 		"provider_protocols", strings.Join(providerProtos, ","))
 
-	// 跨协议转换损失检测
+	// 跨协议转换损失检测（声明式能力差集）
 	if upstreamProto != req.SourceProtocol {
-		convResult := conversion.Compare(req.SourceProtocol, upstreamProto, req)
-		c.Set("conv_result", convResult)
-		c.Set("conv_status", convResult.Status)
-		if len(convResult.Warnings) > 0 {
-			c.Header("X-Gateway-Warnings", strings.Join(convResult.Warnings, "; "))
+		entryDesc, entryOK := registry.Get(req.SourceProtocol)
+		upDesc, upOK := registry.Get(upstreamProto)
+		if entryOK && upOK &&
+			entryDesc.Capabilities != nil && upDesc.Capabilities != nil {
+			convResult := conversion.Compare(entryDesc.Capabilities, upDesc.Capabilities)
+			c.Set("conv_result", convResult)
+			convStatus := conversion.BuildStatusCode(
+				conversion.ProtocolID(req.SourceProtocol),
+				conversion.ProtocolID(upstreamProto),
+				convResult.Status,
+				false,
+			)
+			c.Set("conv_status", convStatus)
+			if len(convResult.Warnings) > 0 {
+				c.Header("X-Gateway-Warnings", strings.Join(convResult.Warnings, "; "))
+			}
+			coreErrors.TraceDebugKVs(traceID, "conversion_detected",
+				"conv_status", conversion.DecodeSummary(convStatus),
+				"lost_fields", strings.Join(convResult.LostFields, ","))
 		}
-		coreErrors.TraceDebugKVs(traceID, "conversion_detected",
-			"conv_status", conversion.DecodeSummary(convResult.Status),
-			"lost_fields", strings.Join(convResult.LostFields, ","))
+	} else {
+		// 同协议直通，记录 conv_status 方便日志统计
+		c.Set("conv_status", conversion.BuildStatusCode(
+			conversion.ProtocolID(req.SourceProtocol),
+			conversion.ProtocolID(upstreamProto),
+			0,
+			true,
+		))
 	}
 
 	upDesc, ok := registry.Get(upstreamProto)

@@ -8,12 +8,20 @@ import (
 	"strings"
 )
 
-// Capability 代表一项具体的能力/功能
+// =============================================================================
+// 类型定义
+// =============================================================================
+
+// Capability 代表一项具体的能力/功能。
+// 每个能力可选择绑定一个 LossBit（对应 conversion 包中的 Loss* 常量），
+// 用于跨协议转换时在 conv_status 中编码该能力的丢失状态。
 type Capability struct {
 	Key         string `json:"key"`         // 唯一标识，如 "streaming", "function_calling"
 	Label       string `json:"label"`       // 显示名称
 	Description string `json:"description"` // 详细描述
 	Category    string `json:"category"`    // 分类：core, input, output, advanced, other
+	LossBit     uint64 `json:"-"`           // 对应的 conv_status Loss* 常量（0 表示不在 conv_status 中编码）
+	LossHint    string `json:"-"`           // 丢失时的用户提示（为空则自动生成）
 }
 
 // ProtocolCaps 描述一个协议的完整能力集

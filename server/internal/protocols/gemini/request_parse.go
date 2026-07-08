@@ -34,9 +34,11 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 			} `json:"parts"`
 		}
 		if json.Unmarshal(raw.SystemInstruction, &si) == nil {
+			var sb strings.Builder
 			for _, part := range si.Parts {
-				systemPrompt += part.Text
+				sb.WriteString(part.Text)
 			}
+			systemPrompt = sb.String()
 		}
 	}
 
@@ -79,8 +81,8 @@ func (p *GeminiProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 				if args, ok := fc["args"]; ok {
 					argsJSON, _ := json.Marshal(args)
 					toolCalls = append(toolCalls, unified.ToolCall{
-						ID:   fmt.Sprintf("call_%s", name),
-						Type: "function",
+						ID:       fmt.Sprintf("call_%s", name),
+						Type:     "function",
 						Function: unified.FunctionCall{Name: name, Arguments: string(argsJSON)},
 					})
 				}

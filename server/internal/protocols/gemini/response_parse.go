@@ -2,7 +2,8 @@ package gemini
 
 import (
 	"encoding/json"
-	"fmt"
+
+	"github.com/google/uuid"
 
 	"ai-gateway/internal/core/reasonmap"
 	"ai-gateway/internal/core/unified"
@@ -58,7 +59,7 @@ func (p *GeminiProvider) parseGeminiResponse(body []byte) (*unified.Response, er
 				name, _ := fc["name"].(string)
 				argsJSON, _ := json.Marshal(fc["args"])
 				toolCalls = append(toolCalls, unified.ToolCall{
-					ID:       fmt.Sprintf("call_%s", name),
+					ID:       "call_" + uuid.New().String()[:8],
 					Type:     "function",
 					Function: unified.FunctionCall{Name: name, Arguments: string(argsJSON)},
 				})

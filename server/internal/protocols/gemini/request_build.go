@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +31,11 @@ func (p *GeminiProvider) FromUnified(req *unified.Request) (*unified.Response, <
 		url += "&alt=sse"
 	}
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	ctx := req.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,7 +53,7 @@ func (p *GeminiProvider) FromUnified(req *unified.Request) (*unified.Response, <
 	}
 
 	if req.Stream {
-		events := p.streamGeminiToUnified(resp.Body)
+		events := p.streamGeminiToUnified(ctx, resp.Body)
 		return nil, events, nil
 	}
 	defer resp.Body.Close()

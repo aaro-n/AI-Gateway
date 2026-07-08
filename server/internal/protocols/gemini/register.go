@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/protocols/capabilities"
 	"encoding/base64"
 
 	"github.com/gin-gonic/gin"
@@ -30,8 +31,9 @@ func init() {
 		NewProvider: func(cfg *registry.Config) registry.Provider {
 			return NewGeminiProvider(cfg)
 		},
-		TestExecutor: &GeminiTestExecutor{},
+		TestExecutor:   &GeminiTestExecutor{},
 		DefaultBaseURL: "https://generativelanguage.googleapis.com/v1beta",
+		Capabilities:   capabilities.Get("gemini"),
 		FormSchema: []registry.FormField{
 			{
 				Key: "base_url", Label: "Base URL", Type: "url",

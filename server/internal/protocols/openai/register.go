@@ -2,6 +2,7 @@ package openai
 
 import (
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/protocols/capabilities"
 	"encoding/hex"
 
 	"github.com/gin-gonic/gin"
@@ -26,9 +27,8 @@ func init() {
 		NewProvider: func(cfg *registry.Config) registry.Provider {
 			return NewOpenAIProvider(cfg)
 		},
-		TestExecutor: &OpenAITestExecutor{},
-		DefaultBaseURL: "https://api.openai.com/v1",
-		FormSchema: []registry.FormField{
+		TestExecutor:   &OpenAITestExecutor{},
+		DefaultBaseURL: "https://api.openai.com/v1", Capabilities: capabilities.Get("openai"), FormSchema: []registry.FormField{
 			{
 				Key: "base_url", Label: "Base URL", Type: "url",
 				Placeholder: "https://api.openai.com/v1",

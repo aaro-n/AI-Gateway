@@ -2,6 +2,7 @@ package openrouter
 
 import (
 	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/protocols/capabilities"
 	"encoding/hex"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,7 @@ func init() {
 		},
 		TestExecutor:   &OpenRouterTestExecutor{},
 		DefaultBaseURL: "https://openrouter.ai/api/v1",
+		Capabilities:   capabilities.Get("openrouter"),
 		FormSchema: []registry.FormField{
 			{
 				Key: "base_url", Label: "Base URL", Type: "url",

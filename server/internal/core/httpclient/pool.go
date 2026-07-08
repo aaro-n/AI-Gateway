@@ -8,22 +8,60 @@ import (
 	"time"
 )
 
+// PoolConfig 可配置的 HTTP 连接池参数。
+type PoolConfig struct {
+	MaxIdleConns        int
+	MaxIdleConnsPerHost int
+	MaxConnsPerHost     int
+	IdleConnTimeout     time.Duration
+	RequestTimeout      time.Duration
+}
+
+// DefaultPoolConfig 返回合理的默认值。
+func DefaultPoolConfig() PoolConfig {
+	return PoolConfig{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		MaxConnsPerHost:     50,
+		IdleConnTimeout:     90 * time.Second,
+		RequestTimeout:      10 * time.Minute,
+	}
+}
+
 var (
-	pool     *http.Client
-	poolOnce sync.Once
+	pool       *http.Client
+	poolConfig *PoolConfig
+	poolOnce   sync.Once
+	poolMu     sync.RWMutex
 )
+
+// ConfigurePool 在服务启动时调用，设置 HTTP 连接池参数。
+// 必须在首次使用 Pool() 之前调用。
+func ConfigurePool(cfg PoolConfig) {
+	poolMu.Lock()
+	defer poolMu.Unlock()
+	c := cfg
+	poolConfig = &c
+}
 
 // Pool 返回全局共享的 *http.Client，配置了连接池参数。
 // 适用于所有协议的流式请求（无固定超时）和同步请求（请配合 context.WithTimeout）。
 func Pool() *http.Client {
 	poolOnce.Do(func() {
+		cfg := DefaultPoolConfig()
+		poolMu.RLock()
+		if poolConfig != nil {
+			cfg = *poolConfig
+		}
+		poolMu.RUnlock()
+
 		pool = &http.Client{
-			Timeout: 10 * time.Minute, // 流式可能很长时间，用 context 控制
+			Timeout: cfg.RequestTimeout, // 流式可能很长时间，用 context 控制
 			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-				MaxConnsPerHost:     20,
+				MaxIdleConns:        cfg.MaxIdleConns,
+				MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
+				IdleConnTimeout:     cfg.IdleConnTimeout,
+				MaxConnsPerHost:     cfg.MaxConnsPerHost,
 			},
 		}
 	})

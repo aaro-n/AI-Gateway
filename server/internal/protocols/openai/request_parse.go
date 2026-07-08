@@ -1,10 +1,10 @@
 package openai
 
 import (
-	"fmt"
-	"encoding/json"
-	"strings"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // ToUnified — OpenAI 请求 → UnifiedRequest（基本透传，OpenAI 是中间表示的基础）
@@ -38,21 +38,25 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 	msgs := make([]unified.Message, 0, len(raw.Messages))
 	systemParts := make([]string, 0)
 	for _, rawMsg := range raw.Messages {
-		// 先解析为 map 保留 unknown fields（reasoning_content 等）
-		var rawMap map[string]json.RawMessage
-		if err := json.Unmarshal(rawMsg, &rawMap); err != nil {
+		// 一次解析到包含 extra fields 的结构体，避免重复 Unmarshal
+		var msgWithExtras struct {
+			Role             string             `json:"role"`
+			Content          json.RawMessage    `json:"content"`
+			ReasoningContent string             `json:"reasoning_content,omitempty"`
+			ToolCalls        []unified.ToolCall `json:"tool_calls,omitempty"`
+			ToolCallID       string             `json:"tool_call_id,omitempty"`
+			Name             string             `json:"name,omitempty"`
+		}
+		if err := json.Unmarshal(rawMsg, &msgWithExtras); err != nil {
 			return nil, fmt.Errorf("parse message: %w", err)
 		}
-		var m unified.Message
-		if err := json.Unmarshal(rawMsg, &m); err != nil {
-			return nil, fmt.Errorf("parse message: %w", err)
-		}
-		// 提取 reasoning_content（o1/o3 思维链，多轮对话须原样传回）
-		if rc, ok := rawMap["reasoning_content"]; ok {
-			var s string
-			if json.Unmarshal(rc, &s) == nil {
-				m.ReasoningContent = s
-			}
+		m := unified.Message{
+			Role:             msgWithExtras.Role,
+			Content:          msgWithExtras.Content,
+			ReasoningContent: msgWithExtras.ReasoningContent,
+			ToolCalls:        msgWithExtras.ToolCalls,
+			ToolCallID:       msgWithExtras.ToolCallID,
+			Name:             msgWithExtras.Name,
 		}
 		if m.Role == "system" {
 			systemParts = append(systemParts, unified.ContentString(m.Content))
@@ -94,4 +98,3 @@ func (p *OpenAIProvider) ToUnified(body []byte, modelID string) (*unified.Reques
 }
 
 // =============================================================================
-

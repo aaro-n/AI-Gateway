@@ -1,10 +1,10 @@
 package anthropic
 
 import (
-	"fmt"
-	"encoding/json"
-	"strings"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // =============================================================================
@@ -47,14 +47,16 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 				CacheControl map[string]any `json:"cache_control,omitempty"`
 			}
 			if json.Unmarshal(raw.System, &blocks) == nil {
+				var sb strings.Builder
 				for _, b := range blocks {
 					if b.Type == "text" {
-						systemPrompt += b.Text
+						sb.WriteString(b.Text)
 						if b.CacheControl != nil {
 							systemCacheControl = b.CacheControl
 						}
 					}
 				}
+				systemPrompt = sb.String()
 			}
 		}
 	}
@@ -207,5 +209,3 @@ func (p *AnthropicProvider) ToUnified(body []byte, modelID string) (*unified.Req
 	}
 	return req, nil
 }
-
-

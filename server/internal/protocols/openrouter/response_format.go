@@ -1,15 +1,18 @@
 package openrouter
 
 import (
-	"bufio"
-	"fmt"
-	"github.com/gin-gonic/gin"
-	"net/http"
-	"io"
-	"encoding/json"
 	"ai-gateway/internal/core/registry"
-	"strings"
+	"ai-gateway/internal/core/streamutil"
 	"ai-gateway/internal/core/unified"
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // =============================================================================
@@ -182,17 +185,20 @@ func (p *OpenRouterProvider) parseOpenRouterResponse(body []byte) (*unified.Resp
 // 流式：OpenRouter SSE → unified.StreamEvent chan
 // =============================================================================
 
-func (p *OpenRouterProvider) streamOpenRouterToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
-	ch := make(chan unified.StreamEvent, 32)
+func (p *OpenRouterProvider) streamOpenRouterToUnified(ctx context.Context, body io.ReadCloser) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, streamutil.BufferSize)
 	go func() {
 		defer body.Close()
 		defer close(ch)
 		reader := bufio.NewReader(body)
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					ch <- unified.StreamEvent{Type: unified.EventError}
+					streamutil.SendEvent(ctx, ch, unified.StreamEvent{Type: unified.EventError})
 				}
 				return
 			}
@@ -202,7 +208,7 @@ func (p *OpenRouterProvider) streamOpenRouterToUnified(body io.ReadCloser) <-cha
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
-				ch <- unified.StreamEvent{Type: unified.EventDone, FinishReason: "stop"}
+				streamutil.SendEvent(ctx, ch, unified.StreamEvent{Type: unified.EventDone, FinishReason: "stop"})
 				return
 			}
 			var chunk struct {
@@ -223,13 +229,15 @@ func (p *OpenRouterProvider) streamOpenRouterToUnified(body io.ReadCloser) <-cha
 
 			// 发送 usage 事件
 			if chunk.Usage != nil {
-				ch <- unified.StreamEvent{
+				if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
 					Type: unified.EventUsage,
 					Usage: &unified.Usage{
 						CachedTokens: chunk.Usage.PromptTokensDetails.CachedTokens,
 						InputTokens:  chunk.Usage.PromptTokens - chunk.Usage.PromptTokensDetails.CachedTokens,
 						OutputTokens: chunk.Usage.CompletionTokens,
 					},
+				}) {
+					return
 				}
 			}
 
@@ -246,10 +254,11 @@ func (p *OpenRouterProvider) streamOpenRouterToUnified(body io.ReadCloser) <-cha
 				if choice.FinishReason != nil {
 					ev.FinishReason = *choice.FinishReason
 				}
-				ch <- ev
+				if !streamutil.SendEvent(ctx, ch, ev) {
+					return
+				}
 			}
 		}
 	}()
 	return ch
 }
-

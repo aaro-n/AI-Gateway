@@ -26,15 +26,16 @@ type createProviderRequest struct {
 }
 
 type updateProviderRequest struct {
-	Name              string  `json:"name"`
-	OpenAIBaseURL     *string `json:"openai_base_url"`
-	AnthropicBaseURL  *string `json:"anthropic_base_url"`
-	GeminiBaseURL     *string `json:"gemini_base_url"`
-	DeepSeekBaseURL   *string `json:"deepseek_base_url"`
-	OpenRouterBaseURL *string `json:"openrouter_base_url"`
-	APIKey            string  `json:"api_key"`
-	Enabled           *bool   `json:"enabled"`
-	Priority          *int    `json:"priority"`
+	Name              string            `json:"name"`
+	OpenAIBaseURL     *string           `json:"openai_base_url"`
+	AnthropicBaseURL  *string           `json:"anthropic_base_url"`
+	GeminiBaseURL     *string           `json:"gemini_base_url"`
+	DeepSeekBaseURL   *string           `json:"deepseek_base_url"`
+	OpenRouterBaseURL *string           `json:"openrouter_base_url"`
+	Endpoints         map[string]string `json:"endpoints"` // 新：多协议端点统一管理
+	APIKey            string            `json:"api_key"`
+	Enabled           *bool             `json:"enabled"`
+	Priority          *int              `json:"priority"`
 }
 
 type providerResponse struct {
@@ -54,14 +55,19 @@ func NewProviderHandler() *ProviderHandler {
 }
 
 func buildEndpoints(eps map[string]string) string {
-	if eps == nil { eps = make(map[string]string) }
+	if eps == nil {
+		eps = make(map[string]string)
+	}
 	trimmed := make(map[string]string, len(eps))
-	for k, v := range eps { trimmed[k] = strings.TrimSuffix(v, "/") }
-	if len(trimmed) == 0 { return "" }
+	for k, v := range eps {
+		trimmed[k] = strings.TrimSuffix(v, "/")
+	}
+	if len(trimmed) == 0 {
+		return ""
+	}
 	b, _ := json.Marshal(trimmed)
 	return string(b)
 }
-
 
 func (h *ProviderHandler) List(c *gin.Context) {
 	var providers []model.Provider
@@ -83,10 +89,10 @@ func (h *ProviderHandler) List(c *gin.Context) {
 			Name:         p.Name,
 			Endpoints:    p.EndpointsMap(),
 			APIKeyMasked: maskAPIKey(p.APIKey),
-			Enabled:           p.Enabled,
-			Priority:          p.Priority,
-			Models:            models,
-			CreatedAt:         p.CreatedAt.Format("2006-01-02 15:04:05"),
+			Enabled:      p.Enabled,
+			Priority:     p.Priority,
+			Models:       models,
+			CreatedAt:    p.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 	}
 
@@ -112,15 +118,15 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
-		ID:                provider.ID,
-		Slug:              provider.Slug,
-		Name:              provider.Name,
+		ID:           provider.ID,
+		Slug:         provider.Slug,
+		Name:         provider.Name,
 		Endpoints:    provider.EndpointsMap(),
 		APIKeyMasked: maskAPIKey(provider.APIKey),
-		Enabled:           provider.Enabled,
-		Priority:          provider.Priority,
-		Models:            models,
-		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		Enabled:      provider.Enabled,
+		Priority:     provider.Priority,
+		Models:       models,
+		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -150,14 +156,14 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"provider": providerResponse{
-		ID:                provider.ID,
-		Slug:              provider.Slug,
-		Name:              provider.Name,
+		ID:           provider.ID,
+		Slug:         provider.Slug,
+		Name:         provider.Name,
 		Endpoints:    provider.EndpointsMap(),
 		APIKeyMasked: maskAPIKey(provider.APIKey),
-		Enabled:           provider.Enabled,
-		Priority:          provider.Priority,
-		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		Enabled:      provider.Enabled,
+		Priority:     provider.Priority,
+		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -185,7 +191,12 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		updates["name"] = req.Name
 	}
 
-	// 允许更新 BaseURL（包括清空）
+	// 新 Endpoints JSON 统一管理（优先于扁平列）
+	if req.Endpoints != nil {
+		updates["endpoints"] = buildEndpoints(req.Endpoints)
+	}
+
+	// 允许更新 BaseURL（包括清空）— 向后兼容旧的扁平列
 	if req.OpenAIBaseURL != nil {
 		updates["openai_base_url"] = strings.TrimSuffix(*req.OpenAIBaseURL, "/")
 	}
@@ -216,7 +227,23 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		router.ClearAllCooldownsForProvider(provider.ID)
 	}
 
-	// 验证更新后至少有一个 BaseURL
+	// 验证更新后至少有一个 BaseURL（检查 endpoints JSON 和扁平列）
+	hasEndpoints := false
+
+	// 检查新的 endpoints JSON
+	if endpointsJSON, ok := updates["endpoints"].(string); ok && endpointsJSON != "" && endpointsJSON != "null" {
+		var eps map[string]string
+		if json.Unmarshal([]byte(endpointsJSON), &eps) == nil {
+			for _, url := range eps {
+				if url != "" {
+					hasEndpoints = true
+					break
+				}
+			}
+		}
+	}
+
+	// 检查扁平列（向后兼容）
 	newOpenAIBaseURL := provider.OpenAIBaseURL
 	newAnthropicBaseURL := provider.AnthropicBaseURL
 	newGeminiBaseURL := provider.GeminiBaseURL
@@ -237,9 +264,12 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	if openrouterURL, ok := updates["openrouter_base_url"].(string); ok {
 		newOpenRouterBaseURL = openrouterURL
 	}
-	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" && newGeminiBaseURL == "" && newDeepSeekBaseURL == "" && newOpenRouterBaseURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
-		return
+	if newOpenAIBaseURL == "" && newAnthropicBaseURL == "" && newGeminiBaseURL == "" && newDeepSeekBaseURL == "" && newOpenRouterBaseURL == "" && !hasEndpoints {
+		// 如果 endpoints JSON 也没被更新，检查现有 provider 的 endpoints
+		if provider.Endpoints == "" || provider.Endpoints == "null" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
+			return
+		}
 	}
 
 	if err := model.DB.Model(&provider).Updates(updates).Error; err != nil {
@@ -255,15 +285,15 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"provider": providerResponse{
-		ID:                provider.ID,
-		Slug:              provider.Slug,
-		Name:              provider.Name,
+		ID:           provider.ID,
+		Slug:         provider.Slug,
+		Name:         provider.Name,
 		Endpoints:    provider.EndpointsMap(),
 		APIKeyMasked: maskAPIKey(provider.APIKey),
-		Enabled:           provider.Enabled,
-		Priority:          provider.Priority,
-		Models:            models,
-		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		Enabled:      provider.Enabled,
+		Priority:     provider.Priority,
+		Models:       models,
+		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
 	}})
 }
 
@@ -305,12 +335,13 @@ func (h *ProviderHandler) Delete(c *gin.Context) {
 }
 
 type testConnectionRequest struct {
-	OpenAIBaseURL     string `json:"openai_base_url"`
-	AnthropicBaseURL  string `json:"anthropic_base_url"`
-	GeminiBaseURL     string `json:"gemini_base_url"`
-	DeepSeekBaseURL   string `json:"deepseek_base_url"`
-	OpenRouterBaseURL string `json:"openrouter_base_url"`
-	APIKey            string `json:"api_key"`
+	OpenAIBaseURL     string            `json:"openai_base_url"`
+	AnthropicBaseURL  string            `json:"anthropic_base_url"`
+	GeminiBaseURL     string            `json:"gemini_base_url"`
+	DeepSeekBaseURL   string            `json:"deepseek_base_url"`
+	OpenRouterBaseURL string            `json:"openrouter_base_url"`
+	Endpoints         map[string]string `json:"endpoints"`
+	APIKey            string            `json:"api_key"`
 }
 
 func (h *ProviderHandler) TestConnection(c *gin.Context) {
@@ -381,8 +412,7 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		return
 	}
 
-	models, err := protocolsPkg.AutoSyncModels(provider.ID, provider.EndpointsMap(), provider.APIKey,
-	)
+	models, err := protocolsPkg.AutoSyncModels(provider.ID, provider.EndpointsMap(), provider.APIKey)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
 		return

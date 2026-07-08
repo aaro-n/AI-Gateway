@@ -13,6 +13,13 @@ import (
 )
 
 // FormatUnified 将 Unified 响应/流格式化为 Gemini 客户端格式
+
+// accumulatedToolCall 跟踪流式 InputJSON delta 累积状态
+type accumulatedToolCall struct {
+	name    string
+	jsonBuf string
+}
+
 func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, c *gin.Context, usage *registry.Usage) error {
 	if resp != nil {
 		usage.InputTokens = resp.Usage.InputTokens
@@ -63,6 +70,7 @@ func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan uni
 	c.Header("Connection", "keep-alive")
 
 	var inputTokens, outputTokens int
+	accumulated := make(map[string]*accumulatedToolCall) // InputJSON 累积: tool_call_id → state
 	for ev := range events {
 		switch ev.Type {
 		case unified.EventChunk:
@@ -120,10 +128,23 @@ func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan uni
 			}
 			// Anthropic 风格的 InputJSON（流式工具参数增量）
 			if ev.Delta.InputJSON != "" {
-				// InputJSON 是增量 JSON 片段，无法直接构建 functionCall。
-				// 累积到最终 EventDone 时再一次性输出。
-				// 此处仅缓存，不立即 emit。
-				_ = ev.Delta.InputJSON // 缓存逻辑见 EventDone 分支
+				// 从 TransformerMetadata 获取 tool_call_id 和 tool_name（Anthropic stream.go 设置）
+				toolCallID := "tool"
+				toolName := "unknown"
+				if meta := ev.Delta.TransformerMetadata; meta != nil {
+					if id, ok := meta["tool_call_id"].(string); ok && id != "" {
+						toolCallID = id
+					}
+					if name, ok := meta["tool_name"].(string); ok && name != "" {
+						toolName = name
+					}
+				}
+				acc, ok := accumulated[toolCallID]
+				if !ok {
+					acc = &accumulatedToolCall{name: toolName}
+					accumulated[toolCallID] = acc
+				}
+				acc.jsonBuf += ev.Delta.InputJSON
 			}
 		case unified.EventUsage:
 			if ev.Usage != nil {
@@ -131,9 +152,19 @@ func (p *GeminiProvider) FormatUnified(resp *unified.Response, events <-chan uni
 				outputTokens = ev.Usage.OutputTokens
 			}
 		case unified.EventDone:
+			parts := make([]interface{}, 0, len(accumulated))
+			for _, acc := range accumulated {
+				var args interface{}
+				if err := json.Unmarshal([]byte(acc.jsonBuf), &args); err != nil {
+					args = acc.jsonBuf // 无法解析则透传原始字符串
+				}
+				parts = append(parts, map[string]interface{}{
+					"functionCall": map[string]interface{}{"name": acc.name, "args": args},
+				})
+			}
 			chunk := map[string]interface{}{
 				"candidates": []map[string]interface{}{{
-					"content":      map[string]interface{}{"role": "model", "parts": []interface{}{}},
+					"content":      map[string]interface{}{"role": "model", "parts": parts},
 					"finishReason": reasonmap.UnifiedToGemini(ev.FinishReason),
 				}},
 				"usageMetadata": map[string]interface{}{

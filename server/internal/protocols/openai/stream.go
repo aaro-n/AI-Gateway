@@ -1,24 +1,31 @@
 package openai
 
 import (
-	"bufio"
-	"io"
-	"encoding/json"
-	"strings"
+	"ai-gateway/internal/core/streamutil"
 	"ai-gateway/internal/core/unified"
+	"bufio"
+	"context"
+	"encoding/json"
+	"io"
+	"log"
+	"strings"
 )
 
-func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unified.StreamEvent {
-	ch := make(chan unified.StreamEvent, 32)
+func (p *OpenAIProvider) streamOpenAIToUnified(ctx context.Context, body io.ReadCloser) <-chan unified.StreamEvent {
+	ch := make(chan unified.StreamEvent, streamutil.BufferSize)
 	go func() {
 		defer body.Close()
 		defer close(ch)
 		reader := bufio.NewReader(body)
 		for {
+			// Check context before blocking read
+			if ctx.Err() != nil {
+				return
+			}
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					ch <- unified.StreamEvent{Type: unified.EventError}
+					streamutil.SendEvent(ctx, ch, unified.StreamEvent{Type: unified.EventError})
 				}
 				return
 			}
@@ -28,7 +35,7 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if data == "[DONE]" {
-				ch <- unified.StreamEvent{Type: unified.EventDone}
+				streamutil.SendEvent(ctx, ch, unified.StreamEvent{Type: unified.EventDone})
 				return
 			}
 			var chunk struct {
@@ -44,22 +51,25 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 				Usage *openAIUsageRaw `json:"usage"`
 			}
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				log.Printf("[OpenAI stream] failed to unmarshal SSE chunk: %v, data=%s", err, streamutil.Truncate(data, 200))
 				continue
 			}
 			if chunk.Usage != nil {
-				ch <- unified.StreamEvent{
+				if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
 					Type: unified.EventUsage,
 					Usage: &unified.Usage{
 						CachedTokens: chunk.Usage.PromptTokensDetails.CachedTokens,
 						InputTokens:  chunk.Usage.PromptTokens - chunk.Usage.PromptTokensDetails.CachedTokens,
 						OutputTokens: chunk.Usage.CompletionTokens,
 					},
+				}) {
+					return
 				}
 			}
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
 				if delta.Content != "" || len(delta.ToolCalls) > 0 || delta.Role != "" || delta.ReasoningContent != "" {
-					ch <- unified.StreamEvent{
+					if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
 						Type: unified.EventChunk,
 						Delta: &unified.Delta{
 							Role:             delta.Role,
@@ -67,12 +77,16 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 							ReasoningContent: delta.ReasoningContent,
 							ToolCalls:        delta.ToolCalls,
 						},
+					}) {
+						return
 					}
 				}
 				if chunk.Choices[0].FinishReason != "" {
-					ch <- unified.StreamEvent{
+					if !streamutil.SendEvent(ctx, ch, unified.StreamEvent{
 						Type:         unified.EventDone,
 						FinishReason: chunk.Choices[0].FinishReason,
+					}) {
+						return
 					}
 				}
 			}
@@ -80,4 +94,3 @@ func (p *OpenAIProvider) streamOpenAIToUnified(body io.ReadCloser) <-chan unifie
 	}()
 	return ch
 }
-

@@ -12,7 +12,10 @@
 // 因为它字段最全、生态最广，且现有转换代码已大量基于此格式。
 package unified
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // =============================================================================
 // 请求侧
@@ -47,6 +50,9 @@ type Request struct {
 
 	// 源协议标记（响应反向转换时需要知道返回什么格式给客户端）
 	SourceProtocol string `json:"-"`
+
+	// 请求上下文（用于流式取消、超时控制）
+	Ctx context.Context `json:"-"`
 }
 
 // Message 统一消息（OpenAI 风格，支持 content blocks）

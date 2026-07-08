@@ -6,9 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/router"
 )
 
 type UsageHandler struct{}
@@ -427,36 +425,6 @@ func (h *UsageHandler) ModelLogs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"logs": logsResponses})
-}
-
-func NewModelLog(source string, clientIPs string, keyID uint, keyName, modelName string, result *router.RouteResult, matched bool, usage *registry.Usage, latencyMs int, status string, errorMsg string) *model.ModelLog {
-	actualModelName := result.ProviderModel.DisplayName
-	if actualModelName == "" {
-		actualModelName = result.ProviderModel.ModelID
-	}
-	callMethod := "direct"
-	if !matched {
-		callMethod = "convert"
-	}
-	return &model.ModelLog{
-		Source:          source,
-		ClientIPs:       clientIPs,
-		KeyID:           keyID,
-		KeyName:         keyName,
-		Model:           modelName,
-		ProviderID:      result.Provider.ID,
-		ProviderName:    result.Provider.Name,
-		ActualModelID:   result.ProviderModel.ModelID,
-		ActualModelName: actualModelName,
-		CallMethod:      callMethod,
-		CachedTokens:    usage.CachedTokens,
-		InputTokens:     usage.InputTokens,
-		OutputTokens:    usage.OutputTokens,
-		TotalTokens:     usage.TotalTokens(),
-		LatencyMs:       latencyMs,
-		Status:          status,
-		ErrorMsg:        errorMsg,
-	}
 }
 
 func NewMCPLog(source string, clientIPs string, keyID uint, keyName string, mcpID uint, mcpName string, mcpType string, callType string, callTarget string, callMethod string, inputSize int, outputSize int, latencyMs int, status string, errorMsg string) *model.MCPLog {
