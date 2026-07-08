@@ -111,6 +111,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCopyText } from '@/composables/useCopyText'
+import { getProtocolLabel, getProtocolTagType } from "@/protocols"
 import api from '@/api'
 import { getSortConfig, setSortConfig, sortByArrayLength } from '@/utils/tableSort'
 
@@ -235,23 +236,16 @@ async function handleUpdateKey(row: any) {
   }
 }
 
-const providerLabels: Record<string, { label: string; type: string }> = {
-  openai: { label: 'OpenAI', type: 'success' },
-  anthropic: { label: 'Anthropic', type: 'primary' },
-  gemini: { label: 'Gemini', type: 'warning' },
-  deepseek: { label: 'DeepSeek', type: 'danger' },
-  openrouter: { label: 'OpenRouter', type: '' },
-}
 
 function getKeyProviderLabel(row: any): string {
   // 直接读取后端返回的 format 字段（用户创建时选择的格式）
   if (!row.format) return ''
-  return providerLabels[row.format]?.label || row.format.toUpperCase()
+  return getProtocolLabel(row.format)
 }
 
 function getKeyProviderType(row: any): string {
   if (!row.format) return 'info'
-  return providerLabels[row.format]?.type || 'info'
+  return getProtocolTagType(row.format)
 }
 
 async function toggleEnabled(row: any) {

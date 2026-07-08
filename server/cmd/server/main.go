@@ -7,6 +7,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -225,6 +227,7 @@ func main() {
 			protected.PUT("/models/:id/mappings/:mid", modelHandler.UpdateMapping)
 			protected.DELETE("/models/:id/mappings/:mid", modelHandler.DeleteMapping)
 			protected.POST("/models/:id/test", modelTestHandler.TestModel)
+			protected.GET("/models/:id/capabilities", modelHandler.GetCapabilities)
 
 			protected.GET("/keys", keyHandler.List)
 			protected.GET("/keys/:id", keyHandler.Get)
@@ -334,8 +337,30 @@ func main() {
 	}()
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("Server starting on %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: r,
 	}
+
+	// 优雅关闭：SIGINT / SIGTERM
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("Server starting on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	<-quit
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Server exited gracefully")
 }

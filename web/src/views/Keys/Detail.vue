@@ -334,6 +334,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCopyText } from '@/composables/useCopyText'
 import CopyButton from '@/components/CopyButton.vue'
+import { getProtocolLabel, getProtocolTagType } from "@/protocols"
 import api from '@/api'
 import { formatContextDisplay } from '@/utils/format'
 import { getSortConfig, setSortConfig } from '@/utils/tableSort'
@@ -352,23 +353,16 @@ const activeTab = ref('providers')
 const keyDialogVisible = ref(false)
 const newKey = ref('')
 
-const providerLabels: Record<string, { label: string; type: string }> = {
-  openai: { label: 'OpenAI', type: 'success' },
-  anthropic: { label: 'Anthropic', type: 'primary' },
-  gemini: { label: 'Gemini', type: 'warning' },
-  deepseek: { label: 'DeepSeek', type: 'danger' },
-  openrouter: { label: 'OpenRouter', type: '' },
-}
 
 const keyProtocolLabel = computed(() => {
   // 直接读取后端返回的 format 字段
   if (!key.value?.format) return ''
-  return providerLabels[key.value.format]?.label || key.value.format.toUpperCase()
+  return getProtocolLabel(key.value.format)
 })
 
 const keyProtocolType = computed((): 'success' | 'primary' | 'warning' | 'danger' | 'info' => {
   if (!key.value?.format) return 'info'
-  return (providerLabels[key.value.format]?.type || 'info') as any
+  return getProtocolTagType(key.value.format) as any
 })
 
 const models = ref<any[]>([])

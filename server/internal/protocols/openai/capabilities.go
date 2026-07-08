@@ -1,0 +1,26 @@
+package openai
+
+var OpenAICapabilities = map[string]struct{}{
+	"text_chat":   {},
+	"temperature": {},
+	"max_tokens":  {},
+	"stop":        {},
+	"stream":      {},
+	"image_input": {},
+	"top_p":       {},
+	"frequency_penalty": {},
+	"presence_penalty":  {},
+	"seed":              {},
+	"function_calling":    {},
+	"tool_choice":         {},
+	"parallel_tool_calls": {},
+	"reasoning_effort":    {},
+	"response_format":     {},
+	"logprobs":            {},
+	"modalities":          {},
+	"n_choices":           {},
+	"web_search":          {},
+	"audio_input":         {},
+	"structured_output":   {},
+	"embeddings":          {},
+}

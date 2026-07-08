@@ -2,6 +2,7 @@ package model
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
@@ -62,6 +63,87 @@ func (p *Provider) BeforeCreate(tx *gorm.DB) error {
 
 func (Provider) TableName() string {
 	return "providers"
+}
+
+// EndpointFor 返回指定协议的 BaseURL。
+// 优先读 Endpoints JSON，fallback 到扁平列。
+func (p *Provider) EndpointFor(protocol string) string {
+	if p.Endpoints != "" {
+		var eps map[string]string
+		if json.Unmarshal([]byte(p.Endpoints), &eps) == nil {
+			if url, ok := eps[protocol]; ok && url != "" {
+				return url
+			}
+		}
+	}
+	switch protocol {
+	case "openai":
+		return p.OpenAIBaseURL
+	case "anthropic":
+		return p.AnthropicBaseURL
+	case "gemini":
+		return p.GeminiBaseURL
+	case "deepseek":
+		return p.DeepSeekBaseURL
+	case "openrouter":
+		return p.OpenRouterBaseURL
+	}
+	return ""
+}
+
+// SupportedProtocols 返回该供应商支持的协议列表。
+// 优先读 Endpoints JSON，fallback 到扁平列。
+func (p *Provider) SupportedProtocols() []string {
+	protocols := make([]string, 0)
+	seen := make(map[string]bool)
+	if p.Endpoints != "" {
+		var eps map[string]string
+		if json.Unmarshal([]byte(p.Endpoints), &eps) == nil {
+			for name, url := range eps {
+				if url != "" && !seen[name] {
+					protocols = append(protocols, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
+	// fallback 扁平列（仅当 JSON 中没有时）
+	flatChecks := map[string]string{
+		"openai":     p.OpenAIBaseURL,
+		"anthropic":  p.AnthropicBaseURL,
+		"gemini":     p.GeminiBaseURL,
+		"deepseek":   p.DeepSeekBaseURL,
+		"openrouter": p.OpenRouterBaseURL,
+	}
+	for name, url := range flatChecks {
+		if url != "" && !seen[name] {
+			protocols = append(protocols, name)
+		}
+	}
+	return protocols
+}
+
+// EndpointsMap 返回所有协议端点（用于 JSON 序列化）。
+// 优先读 Endpoints JSON，fallback 到扁平列。
+func (p *Provider) EndpointsMap() map[string]string {
+	result := make(map[string]string)
+	if p.Endpoints != "" {
+		json.Unmarshal([]byte(p.Endpoints), &result)
+	}
+	// fallback 扁平列
+	flatChecks := map[string]string{
+		"openai":     p.OpenAIBaseURL,
+		"anthropic":  p.AnthropicBaseURL,
+		"gemini":     p.GeminiBaseURL,
+		"deepseek":   p.DeepSeekBaseURL,
+		"openrouter": p.OpenRouterBaseURL,
+	}
+	for name, url := range flatChecks {
+		if url != "" && result[name] == "" {
+			result[name] = url
+		}
+	}
+	return result
 }
 
 type ProviderModel struct {
@@ -361,6 +443,7 @@ type ModelLog struct {
 	TotalTokens     int `gorm:"default:0"`
 	LatencyMs       int `gorm:"default:0"`
 	Status          string
+	ConvStatus      string    `gorm:"column:conv_status;size:100"` // 跨协议转换损失编码
 	ErrorMsg        string    `gorm:"type:text"`
 	CreatedAt       time.Time `gorm:"index"`
 }

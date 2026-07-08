@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -18,14 +19,10 @@ import (
 type ProviderHandler struct{}
 
 type createProviderRequest struct {
-	Name              string `json:"name" binding:"required"`
-	OpenAIBaseURL     string `json:"openai_base_url"`
-	AnthropicBaseURL  string `json:"anthropic_base_url"`
-	GeminiBaseURL     string `json:"gemini_base_url"`
-	DeepSeekBaseURL   string `json:"deepseek_base_url"`
-	OpenRouterBaseURL string `json:"openrouter_base_url"`
-	APIKey            string `json:"api_key" binding:"required"`
-	Priority          int    `json:"priority"`
+	Name      string            `json:"name" binding:"required"`
+	Endpoints map[string]string `json:"endpoints"`
+	APIKey    string            `json:"api_key" binding:"required"`
+	Priority  int               `json:"priority"`
 }
 
 type updateProviderRequest struct {
@@ -41,24 +38,30 @@ type updateProviderRequest struct {
 }
 
 type providerResponse struct {
-	ID                uint                    `json:"id"`
-	Slug              string                  `json:"slug"`
-	Name              string                  `json:"name"`
-	OpenAIBaseURL     string                  `json:"openai_base_url"`
-	AnthropicBaseURL  string                  `json:"anthropic_base_url"`
-	GeminiBaseURL     string                  `json:"gemini_base_url"`
-	DeepSeekBaseURL   string                  `json:"deepseek_base_url"`
-	OpenRouterBaseURL string                  `json:"openrouter_base_url"`
-	APIKeyMasked      string                  `json:"api_key_masked"`
-	Enabled           bool                    `json:"enabled"`
-	Priority          int                     `json:"priority"`
-	Models            []providerModelResponse `json:"models,omitempty"`
-	CreatedAt         string                  `json:"created_at"`
+	ID           uint                    `json:"id"`
+	Slug         string                  `json:"slug"`
+	Name         string                  `json:"name"`
+	Endpoints    map[string]string       `json:"endpoints"`
+	APIKeyMasked string                  `json:"api_key_masked"`
+	Enabled      bool                    `json:"enabled"`
+	Priority     int                     `json:"priority"`
+	Models       []providerModelResponse `json:"models,omitempty"`
+	CreatedAt    string                  `json:"created_at"`
 }
 
 func NewProviderHandler() *ProviderHandler {
 	return &ProviderHandler{}
 }
+
+func buildEndpoints(eps map[string]string) string {
+	if eps == nil { eps = make(map[string]string) }
+	trimmed := make(map[string]string, len(eps))
+	for k, v := range eps { trimmed[k] = strings.TrimSuffix(v, "/") }
+	if len(trimmed) == 0 { return "" }
+	b, _ := json.Marshal(trimmed)
+	return string(b)
+}
+
 
 func (h *ProviderHandler) List(c *gin.Context) {
 	var providers []model.Provider
@@ -75,15 +78,11 @@ func (h *ProviderHandler) List(c *gin.Context) {
 		}
 
 		result[i] = providerResponse{
-			ID:                p.ID,
-			Slug:              p.Slug,
-			Name:              p.Name,
-			OpenAIBaseURL:     p.OpenAIBaseURL,
-			AnthropicBaseURL:  p.AnthropicBaseURL,
-			GeminiBaseURL:     p.GeminiBaseURL,
-			DeepSeekBaseURL:   p.DeepSeekBaseURL,
-			OpenRouterBaseURL: p.OpenRouterBaseURL,
-			APIKeyMasked:      maskAPIKey(p.APIKey),
+			ID:           p.ID,
+			Slug:         p.Slug,
+			Name:         p.Name,
+			Endpoints:    p.EndpointsMap(),
+			APIKeyMasked: maskAPIKey(p.APIKey),
 			Enabled:           p.Enabled,
 			Priority:          p.Priority,
 			Models:            models,
@@ -116,12 +115,8 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 		ID:                provider.ID,
 		Slug:              provider.Slug,
 		Name:              provider.Name,
-		OpenAIBaseURL:     provider.OpenAIBaseURL,
-		AnthropicBaseURL:  provider.AnthropicBaseURL,
-		GeminiBaseURL:     provider.GeminiBaseURL,
-		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
-		OpenRouterBaseURL: provider.OpenRouterBaseURL,
-		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Endpoints:    provider.EndpointsMap(),
+		APIKeyMasked: maskAPIKey(provider.APIKey),
 		Enabled:           provider.Enabled,
 		Priority:          provider.Priority,
 		Models:            models,
@@ -137,18 +132,14 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 	}
 
 	provider := model.Provider{
-		Name:              req.Name,
-		OpenAIBaseURL:     strings.TrimSuffix(req.OpenAIBaseURL, "/"),
-		AnthropicBaseURL:  strings.TrimSuffix(req.AnthropicBaseURL, "/"),
-		GeminiBaseURL:     strings.TrimSuffix(req.GeminiBaseURL, "/"),
-		DeepSeekBaseURL:   strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
-		OpenRouterBaseURL: strings.TrimSuffix(req.OpenRouterBaseURL, "/"),
-		APIKey:            req.APIKey,
-		Enabled:           true,
-		Priority:          req.Priority,
+		Name:      req.Name,
+		Endpoints: buildEndpoints(req.Endpoints),
+		APIKey:    req.APIKey,
+		Enabled:   true,
+		Priority:  req.Priority,
 	}
 
-	if provider.OpenAIBaseURL == "" && provider.AnthropicBaseURL == "" && provider.GeminiBaseURL == "" && provider.DeepSeekBaseURL == "" && provider.OpenRouterBaseURL == "" {
+	if provider.Endpoints == "" || provider.Endpoints == "null" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one base URL is required"})
 		return
 	}
@@ -162,12 +153,8 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		ID:                provider.ID,
 		Slug:              provider.Slug,
 		Name:              provider.Name,
-		OpenAIBaseURL:     provider.OpenAIBaseURL,
-		AnthropicBaseURL:  provider.AnthropicBaseURL,
-		GeminiBaseURL:     provider.GeminiBaseURL,
-		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
-		OpenRouterBaseURL: provider.OpenRouterBaseURL,
-		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Endpoints:    provider.EndpointsMap(),
+		APIKeyMasked: maskAPIKey(provider.APIKey),
 		Enabled:           provider.Enabled,
 		Priority:          provider.Priority,
 		CreatedAt:         provider.CreatedAt.Format("2006-01-02 15:04:05"),
@@ -271,12 +258,8 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		ID:                provider.ID,
 		Slug:              provider.Slug,
 		Name:              provider.Name,
-		OpenAIBaseURL:     provider.OpenAIBaseURL,
-		AnthropicBaseURL:  provider.AnthropicBaseURL,
-		GeminiBaseURL:     provider.GeminiBaseURL,
-		DeepSeekBaseURL:   provider.DeepSeekBaseURL,
-		OpenRouterBaseURL: provider.OpenRouterBaseURL,
-		APIKeyMasked:      maskAPIKey(provider.APIKey),
+		Endpoints:    provider.EndpointsMap(),
+		APIKeyMasked: maskAPIKey(provider.APIKey),
 		Enabled:           provider.Enabled,
 		Priority:          provider.Priority,
 		Models:            models,
@@ -373,7 +356,7 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 		return
 	}
 
-	models, err := protocolsPkg.AutoSyncModels(0, openaiURL, anthropicURL, geminiURL, deepseekURL, apiKey)
+	models, err := protocolsPkg.AutoSyncModels(0, map[string]string{"openai": openaiURL, "anthropic": anthropicURL, "gemini": geminiURL, "deepseek": deepseekURL}, apiKey)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})
 		return
@@ -398,12 +381,7 @@ func (h *ProviderHandler) Test(c *gin.Context) {
 		return
 	}
 
-	models, err := protocolsPkg.AutoSyncModels(provider.ID,
-		provider.OpenAIBaseURL,
-		provider.AnthropicBaseURL,
-		provider.GeminiBaseURL,
-		provider.DeepSeekBaseURL,
-		provider.APIKey,
+	models, err := protocolsPkg.AutoSyncModels(provider.ID, provider.EndpointsMap(), provider.APIKey,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: " + err.Error()})

@@ -8,32 +8,28 @@ import (
 	"ai-gateway/internal/model"
 )
 
-// AutoSyncModels 按优先级 (Gemini → Anthropic → OpenAI) 遍历已配置端点，
-// 使用核心注册表的新 Provider 接口执行 SyncModels，返回首个成功的结果。
-func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepseekURL, apiKey string) ([]model.ProviderModel, error) {
+// AutoSyncModels 按优先级遍历已配置端点，使用核心注册表的新 Provider 接口执行 SyncModels。
+func AutoSyncModels(providerID uint, endpoints map[string]string, apiKey string) ([]model.ProviderModel, error) {
 	type endpoint struct {
 		name    string
 		baseURL string
 	}
 
-	endpoints := []endpoint{
-		{"gemini", geminiURL},
-		{"anthropic", anthropicURL},
-		{"openai", openAIURL},
-		{"deepseek", deepseekURL},
-	}
+	// 优先级: Gemini → Anthropic → OpenAI → DeepSeek
+	priorityOrder := []string{"gemini", "anthropic", "openai", "deepseek"}
 
 	// 1. 优先尝试用户已配置的自定义端点
-	for _, ep := range endpoints {
-		if ep.baseURL == "" {
+	for _, name := range priorityOrder {
+		baseURL, ok := endpoints[name]
+		if !ok || baseURL == "" {
 			continue
 		}
-		desc, ok := registry.Get(ep.name)
-		if !ok || desc.NewProvider == nil {
+		desc, ok2 := registry.Get(name)
+		if !ok2 || desc.NewProvider == nil {
 			continue
 		}
 		prov := desc.NewProvider(&registry.Config{
-			BaseURL: ep.baseURL,
+			BaseURL: baseURL,
 			APIKey:  apiKey,
 		})
 		registryModels, err := prov.SyncModels(providerID)
@@ -43,13 +39,12 @@ func AutoSyncModels(providerID uint, openAIURL, anthropicURL, geminiURL, deepsee
 		return convertModels(registryModels), nil
 	}
 
-	// 2. 兜底：只对用户已配置的自定义端点，尝试使用注册表中的默认官方端点 (DefaultBaseURL)
-	//    避免未配置的协议（如 Anthropic）通过 hardcoded fallback 返回错误模型列表
-	for _, ep := range endpoints {
-		if ep.baseURL == "" {
+	// 2. 兜底：对已配置的协议尝试使用 DefaultBaseURL
+	for _, name := range priorityOrder {
+		if _, ok := endpoints[name]; !ok || endpoints[name] == "" {
 			continue // 只 fallback 用户明确配置了的协议
 		}
-		desc, ok := registry.Get(ep.name)
+		desc, ok := registry.Get(name)
 		if !ok || desc.NewProvider == nil || desc.DefaultBaseURL == "" {
 			continue
 		}

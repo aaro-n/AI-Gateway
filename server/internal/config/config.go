@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
+
+var validate = validator.New(validator.WithRequiredStructEnabled())
 
 type Config struct {
 	Debug    DebugConfig
@@ -39,7 +42,7 @@ type MonitorOtelConfig struct {
 }
 
 type ServerConfig struct {
-	Port            int
+	Port            int `validate:"min=1,max=65535"`
 	TrustedProxies  []string
 	Session         SessionConfig
 	TestConcurrency int // 模型测试并发数，默认 5，环境变量 AG_TEST_CONCURRENCY
@@ -54,10 +57,10 @@ type DebugConfig struct {
 }
 
 type DatabaseConfig struct {
-	Type     string
+	Type     string `validate:"oneof=sqlite postgres"`
 	Path     string
 	Host     string
-	Port     int
+	Port     int `validate:"min=0,max=65535"`
 	Username string
 	Password string
 	DBName   string
@@ -65,18 +68,18 @@ type DatabaseConfig struct {
 }
 
 type PoolConfig struct {
-	MaxOpen     int
-	MaxIdle     int
-	MaxLifetime time.Duration
-	MaxIdleTime time.Duration
+	MaxOpen     int           `validate:"min=1,max=100"`
+	MaxIdle     int           `validate:"min=0,max=100"`
+	MaxLifetime time.Duration `validate:"min=0"`
+	MaxIdleTime time.Duration `validate:"min=0"`
 }
 
 type SessionConfig struct {
-	Secret   string
-	MaxAge   int
+	Secret   string `validate:"min=16"`
+	MaxAge   int    `validate:"min=0"`
 	Secure   bool
 	HttpOnly bool
-	SameSite string
+	SameSite string `validate:"oneof=lax strict none"`
 }
 
 type AuthConfig struct {
@@ -84,12 +87,12 @@ type AuthConfig struct {
 }
 
 type DefaultAdminConfig struct {
-	Username string
-	Password string
+	Username string `validate:"min=1"`
+	Password string `validate:"min=1"`
 }
 
 type PprofConfig struct {
-	Port int
+	Port int `validate:"min=0,max=65535"`
 }
 
 var cfg *Config
@@ -193,6 +196,9 @@ func Load() *Config {
 	}
 
 	applyDefaults()
+	if err := validate.Struct(cfg); err != nil {
+		log.Fatalf("[Config] Validation failed: %v", err)
+	}
 	logConfig()
 
 	return cfg

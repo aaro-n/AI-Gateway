@@ -40,10 +40,10 @@
         </el-table-column>
         <el-table-column :label="t('models.providerType')" width="120">
           <template #default="{ row }">
-            <el-tag v-if="row.provider?.openai_base_url" type="success" size="small" style="margin-right: 4px">OpenAI</el-tag>
-            <el-tag v-if="row.provider?.anthropic_base_url" type="primary" size="small" style="margin-right: 4px">Anthropic</el-tag>
-            <el-tag v-if="row.provider?.gemini_base_url" type="warning" size="small" style="margin-right: 4px">Gemini</el-tag>
-            <el-tag v-if="row.provider?.deepseek_base_url" type="danger" size="small">DeepSeek</el-tag>
+            <template v-for="ep in getProviderEndpoints(row.provider)" :key="ep.name">
+              <el-tag :type="getProtocolTagType(ep.name) as any" size="small" style="margin-right: 4px">{{ getProtocolLabel(ep.name) }}</el-tag>
+            </template>
+            <span v-if="getProviderEndpoints(row.provider).length === 0">-</span>
           </template>
         </el-table-column>
         <el-table-column prop="provider_model_name" :label="t('modelMapping.actualModel')">
@@ -162,21 +162,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Rank, Loading } from '@element-plus/icons-vue'
 import CopyButton from '@/components/CopyButton.vue'
 import Sortable from 'sortablejs'
+import { getProtocolLabel, getProtocolTagType, getProviderEndpoints } from "@/protocols"
 import api from '@/api'
 import { formatContextDisplay } from '@/utils/format'
 
 const { t } = useI18n()
 
-function getProtocolLabel(protocol: string) {
-  const labels: Record<string, string> = {
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-    gemini: 'Google Gemini',
-    deepseek: 'DeepSeek',
-    openrouter: 'OpenRouter',
-  }
-  return labels[protocol] || protocol.toUpperCase()
-}
+
 
 const route = useRoute()
 const router = useRouter()
@@ -199,8 +191,6 @@ interface Mapping {
   provider?: {
     id: number
     name: string
-    openai_base_url: string
-    anthropic_base_url: string
   }
   model_info?: ModelInfo
 }

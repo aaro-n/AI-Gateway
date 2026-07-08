@@ -125,22 +125,13 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import CopyButton from '@/components/CopyButton.vue'
+import { getProtocolLabel } from "@/protocols"
 import api from '@/api'
 import { formatContextDisplay } from '@/utils/format'
 import { getSortConfig, setSortConfig } from '@/utils/tableSort'
 
 const { t } = useI18n()
 
-function getProtocolLabel(protocol: string) {
-  const labels: Record<string, string> = {
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-    gemini: 'Google Gemini',
-    deepseek: 'DeepSeek',
-    openrouter: 'OpenRouter',
-  }
-  return labels[protocol] || protocol.toUpperCase()
-}
 
 const router = useRouter()
 

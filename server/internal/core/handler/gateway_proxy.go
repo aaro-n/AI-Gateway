@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ai-gateway/internal/core/conversion"
 	coreErrors "ai-gateway/internal/core/errors"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
@@ -184,7 +185,7 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 
 	start := time.Now()
 	usage := registry.Usage{}
-	upstreamProtocol, execErr := h.execute(c, unifiedReq, result, &usage)
+	upstreamProtocol, execErr := h.execute(c, unifiedReq, result, &usage, isDirectCall)
 
 	c.Request.URL.Path = originalPath
 	latencyMs := time.Since(start).Milliseconds()
@@ -208,9 +209,15 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	// 10. 日志
 	matched := upstreamProtocol == protocolName
 	clientIPs := utils.GetClientIPInfo(c)
+	convStatusStr := "ok"
+	if convResult, exists := c.Get("conv_result"); exists {
+		if cr, ok := convResult.(*conversion.ConversionResult); ok && cr.Status != 0 {
+			convStatusStr = conversion.DecodeSummary(cr.Status)
+		}
+	}
 	modelLog := h.newModelLog(
 		protocolName, clientIPs, apiKey.ID, apiKey.Name, modelName,
-		result, matched, &usage, int(latencyMs), status, errMsg,
+		result, matched, &usage, int(latencyMs), status, errMsg, convStatusStr,
 	)
 	model.DB.Create(modelLog)
 
@@ -231,11 +238,12 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 			"tokens", fmt.Sprintf("%d", usage.TotalTokens()),
 			"latency_ms", fmt.Sprintf("%d", latencyMs),
 			"key_id", fmt.Sprintf("%d", apiKey.ID),
-			"key_name", apiKey.Name)
+			"key_name", apiKey.Name,
+			"conv_status", convStatusStr)
 	} else {
-		coreErrors.TraceError(traceID, "gateway_failed entry=%s upstream=%s model=%s provider=%s call_type=%s err=%s latency_ms=%d",
+		coreErrors.TraceError(traceID, "gateway_failed entry=%s upstream=%s model=%s provider=%s call_type=%s conv_status=%s err=%s latency_ms=%d",
 			protocolName, upstreamProtocol, modelName, result.Provider.Name,
-			callType, errMsg, latencyMs)
+			callType, convStatusStr, errMsg, latencyMs)
 	}
 }
 
@@ -319,12 +327,12 @@ func (h *UnifiedGatewayHandler) checkKeyConflict(keyID uint) string {
 //
 // 优先使用 Outbound 接口（AxonHub 风格），回退到 Provider.FromUnified。
 func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
-	result *router.RouteResult, usage *registry.Usage) (string, error) {
+	result *router.RouteResult, usage *registry.Usage, isDirectCall bool) (string, error) {
 
 	traceID := middleware.GetTraceID(c)
 
-	// 选择上游协议：优先同协议直通，否则任选一个支持的协议
-	providerProtos := result.GetProviderProtocols()
+	// 选择上游协议：优先同协议直通
+	providerProtos := result.Provider.SupportedProtocols()
 	if len(providerProtos) == 0 {
 		return "", fmt.Errorf("no protocol configured for provider")
 	}
@@ -336,6 +344,15 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 			break
 		}
 	}
+
+	// 直通模式不允许跨协议转换
+	if isDirectCall && upstreamProto == "" {
+		return "", fmt.Errorf(
+			"direct API key does not support cross-protocol conversion: "+
+				"client protocol=%s, provider only supports %v",
+			req.SourceProtocol, providerProtos)
+	}
+
 	if upstreamProto == "" {
 		upstreamProto = providerProtos[0]
 	}
@@ -345,6 +362,19 @@ func (h *UnifiedGatewayHandler) execute(c *gin.Context, req *unified.Request,
 		"source_protocol", req.SourceProtocol,
 		"is_conversion", fmt.Sprintf("%v", upstreamProto != req.SourceProtocol),
 		"provider_protocols", strings.Join(providerProtos, ","))
+
+	// 跨协议转换损失检测
+	if upstreamProto != req.SourceProtocol {
+		convResult := conversion.Compare(req.SourceProtocol, upstreamProto, req)
+		c.Set("conv_result", convResult)
+		c.Set("conv_status", convResult.Status)
+		if len(convResult.Warnings) > 0 {
+			c.Header("X-Gateway-Warnings", strings.Join(convResult.Warnings, "; "))
+		}
+		coreErrors.TraceDebugKVs(traceID, "conversion_detected",
+			"conv_status", conversion.DecodeSummary(convResult.Status),
+			"lost_fields", strings.Join(convResult.LostFields, ","))
+	}
 
 	upDesc, ok := registry.Get(upstreamProto)
 	if !ok {
@@ -414,25 +444,9 @@ func (h *UnifiedGatewayHandler) extractModel(c *gin.Context, body []byte) string
 }
 
 func (h *UnifiedGatewayHandler) getBaseURL(p *model.Provider, protocol string) string {
-	if p.Endpoints != "" {
-		var eps map[string]string
-		if json.Unmarshal([]byte(p.Endpoints), &eps) == nil {
-			if url, ok := eps[protocol]; ok && url != "" {
-				return strings.TrimSuffix(url, "/")
-			}
-		}
-	}
-	switch protocol {
-	case "openai":
-		return strings.TrimSuffix(p.OpenAIBaseURL, "/")
-	case "anthropic":
-		return strings.TrimSuffix(p.AnthropicBaseURL, "/")
-	case "gemini":
-		return strings.TrimSuffix(p.GeminiBaseURL, "/")
-	case "deepseek":
-		return strings.TrimSuffix(p.DeepSeekBaseURL, "/")
-	case "openrouter":
-		return strings.TrimSuffix(p.OpenRouterBaseURL, "/")
+	url := p.EndpointFor(protocol)
+	if url != "" {
+		return strings.TrimSuffix(url, "/")
 	}
 	return ""
 }
@@ -460,7 +474,7 @@ func (h *UnifiedGatewayHandler) verifyKeyID(keyID uint, modelName string) error 
 // newModelLog 构造模型调用日志
 func (h *UnifiedGatewayHandler) newModelLog(source, clientIPs string, keyID uint, keyName, modelName string,
 	result *router.RouteResult, matched bool, usage *registry.Usage,
-	latencyMs int, status, errMsg string) *model.ModelLog {
+	latencyMs int, status, errMsg, convStatus string) *model.ModelLog {
 
 	actualModelName := result.ProviderModel.DisplayName
 	if actualModelName == "" {
@@ -487,6 +501,7 @@ func (h *UnifiedGatewayHandler) newModelLog(source, clientIPs string, keyID uint
 		TotalTokens:     usage.TotalTokens(),
 		LatencyMs:       latencyMs,
 		Status:          status,
+		ConvStatus:      convStatus,
 		ErrorMsg:        errMsg,
 	}
 }

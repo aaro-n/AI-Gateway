@@ -9,6 +9,7 @@ import (
 
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
+	"ai-gateway/internal/protocols/capabilities"
 )
 
 type ModelHandler struct{}
@@ -631,4 +632,156 @@ func calculateCapabilitiesIntersection(mappings []model.ModelMapping) (bool, boo
 	}
 
 	return supportsVision, supportsTools, supportsStream
+}
+
+// ── 动态 Capabilities API ──
+
+// modelCapabilitiesResponse 模型的能力视图
+type modelCapabilitiesResponse struct {
+	ModelID      uint                          `json:"model_id"`
+	ModelName    string                        `json:"model_name"`
+	KeyProtocol  string                        `json:"key_protocol"` // 客户端协议
+	KeyFormat    string                        `json:"key_format"`   // key 的格式
+	Mappings     []mappingCapabilitiesResponse `json:"mappings"`     // 每个映射的能力
+	Intersection capabilityIntersection        `json:"intersection"` // 所有映射的能力交集
+}
+
+type mappingCapabilitiesResponse struct {
+	MappingID       uint                           `json:"mapping_id"`
+	ProviderID      uint                           `json:"provider_id"`
+	ProviderName    string                         `json:"provider_name"`
+	ProviderModelID string                         `json:"provider_model_id"`
+	Weight          int                            `json:"weight"`
+	Enabled         bool                           `json:"enabled"`
+	Protocols       []string                       `json:"protocols"`              // 该 Provider 支持的协议
+	Capabilities    *capabilities.ComparisonResult `json:"capabilities,omitempty"` // 客户端协议 vs 该 Provider 协议的对比
+}
+
+type capabilityIntersection struct {
+	SupportsVision bool `json:"supports_vision"`
+	SupportsTools  bool `json:"supports_tools"`
+	SupportsStream bool `json:"supports_stream"`
+}
+
+// GetCapabilities 返回虚拟模型的动态能力视图。
+// GET /api/v1/models/:id/capabilities?key_id=1
+//
+// 根据 key 的协议格式和模型的实际路由映射，返回跨协议转换的损失分析。
+func (h *ModelHandler) GetCapabilities(c *gin.Context) {
+	modelID, err := middleware.GetID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
+		return
+	}
+
+	keyIDStr := c.Query("key_id")
+	var keyID uint
+	if keyIDStr != "" {
+		id, err := strconv.ParseUint(keyIDStr, 10, 32)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key_id"})
+			return
+		}
+		keyID = uint(id)
+	}
+
+	// 获取模型
+	var m model.Model
+	if err := model.DB.First(&m, modelID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "model not found"})
+		return
+	}
+
+	// 确定客户端协议
+	clientProtocol := "openai" // 默认
+	keyFormat := "openai"
+	if keyID > 0 {
+		var keyFormats []model.KeyFormat
+		model.DB.Where("key_id = ?", keyID).Find(&keyFormats)
+		for _, kf := range keyFormats {
+			if kf.Format != "openai" {
+				keyFormat = kf.Format
+				clientProtocol = kf.Format
+				break
+			}
+		}
+	}
+
+	// 获取模型的所有映射
+	var mappings []model.ModelMapping
+	model.DB.Preload("Provider").Preload("ProviderModel").
+		Joins("JOIN providers ON providers.id = model_mappings.provider_id AND providers.enabled = ?", true).
+		Where("model_id = ?", m.ID).
+		Order("weight DESC").
+		Find(&mappings)
+
+	mappingCaps := make([]mappingCapabilitiesResponse, 0, len(mappings))
+	allVision := true
+	allTools := true
+	allStream := true
+	hasEnabled := false
+
+	for _, mm := range mappings {
+		if !mm.Enabled {
+			continue
+		}
+		if mm.Provider == nil || !mm.Provider.Enabled {
+			continue
+		}
+		if mm.ProviderModel == nil {
+			continue
+		}
+
+		hasEnabled = true
+		pm := mm.ProviderModel
+		if !pm.SupportsVision {
+			allVision = false
+		}
+		if !pm.SupportsTools {
+			allTools = false
+		}
+		if !pm.SupportsStream {
+			allStream = false
+		}
+
+		providerProto := mm.Provider.SupportedProtocols()
+		mc := mappingCapabilitiesResponse{
+			MappingID:       mm.ID,
+			ProviderID:      mm.Provider.ID,
+			ProviderName:    mm.Provider.Name,
+			ProviderModelID: pm.ModelID,
+			Weight:          mm.Weight,
+			Enabled:         mm.Enabled,
+			Protocols:       providerProto,
+		}
+
+		// 如果客户端协议与 provider 协议不同，做对比分析
+		if len(providerProto) > 0 && providerProto[0] != clientProtocol {
+			result := capabilities.Compare(clientProtocol, providerProto[0])
+			mc.Capabilities = &result
+		}
+
+		mappingCaps = append(mappingCaps, mc)
+	}
+
+	if !hasEnabled {
+		allVision = false
+		allTools = false
+		allStream = false
+	}
+
+	resp := modelCapabilitiesResponse{
+		ModelID:     m.ID,
+		ModelName:   m.Name,
+		KeyProtocol: clientProtocol,
+		KeyFormat:   keyFormat,
+		Mappings:    mappingCaps,
+		Intersection: capabilityIntersection{
+			SupportsVision: allVision,
+			SupportsTools:  allTools,
+			SupportsStream: allStream,
+		},
+	}
+
+	c.JSON(http.StatusOK, gin.H{"capabilities": resp})
 }

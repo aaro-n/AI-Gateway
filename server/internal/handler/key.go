@@ -700,16 +700,14 @@ func (h *KeyHandler) ListProviders(c *gin.Context) {
 	protocol := keyFormatToProtocol(keyFormat)
 
 	// 获取该协议下所有启用的 Provider
-	var providers []model.Provider
-	fieldMap := map[string]string{
-		"openai":     "openai_base_url != ''",
-		"anthropic":  "anthropic_base_url != ''",
-		"gemini":     "gemini_base_url != ''",
-		"deepseek":   "deepseek_base_url != ''",
-		"openrouter": "openrouter_base_url != ''",
-	}
-	if cond, ok := fieldMap[protocol]; ok {
-		model.DB.Where("enabled = ?", true).Where(cond).Find(&providers)
+	// 不再硬编码扁平列，改用 EndpointFor() 过滤（同时支持 JSON Endpoints 和扁平列 fallback）
+	var allProviders []model.Provider
+	model.DB.Where("enabled = ?", true).Find(&allProviders)
+	providers := make([]model.Provider, 0, len(allProviders))
+	for _, p := range allProviders {
+		if p.EndpointFor(protocol) != "" {
+			providers = append(providers, p)
+		}
 	}
 
 	// 获取已选中的 provider id
@@ -854,24 +852,20 @@ func (h *KeyHandler) ListProviderModels(c *gin.Context) {
 	}
 	protocol := keyFormatToProtocol(keyFormat)
 
-	// 按协议过滤：只获取匹配协议的 provider_models
-	fieldMap := map[string]string{
-		"openai":     "providers.openai_base_url != ''",
-		"anthropic":  "providers.anthropic_base_url != ''",
-		"gemini":     "providers.gemini_base_url != ''",
-		"deepseek":   "providers.deepseek_base_url != ''",
-		"openrouter": "providers.openrouter_base_url != ''",
-	}
-
-	var pms []model.ProviderModel
-	query := model.DB.Preload("Provider").
+	// 按协议过滤：先查出所有已关联的 provider_models，再用 EndpointFor() 过滤
+	var allPms []model.ProviderModel
+	model.DB.Preload("Provider").
 		Joins("JOIN key_provider_models kpm ON kpm.provider_model_id = provider_models.id AND kpm.key_id = ?", uint(keyID)).
-		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true)
+		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true).
+		Order("provider_models.id ASC").
+		Find(&allPms)
 
-	if cond, ok := fieldMap[protocol]; ok {
-		query = query.Where(cond)
+	pms := make([]model.ProviderModel, 0, len(allPms))
+	for _, pm := range allPms {
+		if pm.Provider != nil && pm.Provider.EndpointFor(protocol) != "" {
+			pms = append(pms, pm)
+		}
 	}
-	query.Order("provider_models.id ASC").Find(&pms)
 
 	result := make([]providerModelWithStatusResponse, 0, len(pms))
 	for _, pm := range pms {

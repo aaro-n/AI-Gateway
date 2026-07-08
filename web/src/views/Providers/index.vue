@@ -15,12 +15,10 @@
         <el-table-column prop="name" :label="t('provider.name')" width="220" sortable />
         <el-table-column :label="t('provider.apiStyles')">
           <template #default="{ row }">
-            <el-tag v-if="row.openai_base_url" type="success" style="margin-right: 4px">OpenAI</el-tag>
-            <el-tag v-if="row.anthropic_base_url" type="primary" style="margin-right: 4px">Anthropic</el-tag>
-            <el-tag v-if="row.gemini_base_url" type="warning" style="margin-right: 4px">Gemini</el-tag>
-            <el-tag v-if="row.deepseek_base_url" type="danger" style="margin-right: 4px">DeepSeek</el-tag>
-            <el-tag v-if="row.openrouter_base_url" type="info" style="margin-right: 4px">OpenRouter</el-tag>
-            <span v-if="!row.openai_base_url && !row.anthropic_base_url && !row.gemini_base_url && !row.deepseek_base_url && !row.openrouter_base_url">-</span>
+            <template v-for="ep in getProviderEndpoints(row)" :key="ep.name">
+              <el-tag :type="getProtocolTagType(ep.name) as any" style="margin-right: 4px">{{ getProtocolLabel(ep.name) }}</el-tag>
+            </template>
+            <span v-if="getProviderEndpoints(row).length === 0">-</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('provider.models')" width="120" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
@@ -141,6 +139,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '@/api'
+import { getProtocolLabel, getProtocolTagType, getProviderEndpoints } from '@/protocols'
 import { getSortConfig, setSortConfig, sortByArrayLength } from '@/utils/tableSort'
 
 const { t } = useI18n()
@@ -158,12 +157,8 @@ const defaultSort = getSortConfig('providers', 'name')
 
 const form = reactive({
   name: '',
-  openai_base_url: '',
-  anthropic_base_url: '',
-  gemini_base_url: '',
-  deepseek_base_url: '',
-  openrouter_base_url: '',
-  base_url: '', // Unified BaseURL input shown to user, mapped dynamically
+  endpoints: {} as Record<string, string>,
+  base_url: '',
   api_key: '',
   provider_type: ''
 })
@@ -215,28 +210,14 @@ function onTypeChange(val: string) {
   const selected = protocolMeta.value.find(p => p.name === val)
   if (selected) {
     form.base_url = selected.default_base_url
-    // 清除所有类型的 base_url，避免切换时残留旧类型的 URL
-    form.openai_base_url = ''
-    form.anthropic_base_url = ''
-    form.gemini_base_url = ''
-    form.deepseek_base_url = ''
-    form.openrouter_base_url = ''
+    form.endpoints = {}
     mapBaseUrls()
   }
 }
 
 function mapBaseUrls() {
-  // 只更新当前类型的 URL，不覆盖其他已配置的 URL（避免编辑时丢失多 BaseURL 数据）
-  if (form.provider_type === 'openai') {
-    form.openai_base_url = form.base_url
-  } else if (form.provider_type === 'anthropic') {
-    form.anthropic_base_url = form.base_url
-  } else if (form.provider_type === 'gemini') {
-    form.gemini_base_url = form.base_url
-  } else if (form.provider_type === 'deepseek') {
-    form.deepseek_base_url = form.base_url
-  } else if (form.provider_type === 'openrouter') {
-    form.openrouter_base_url = form.base_url
+  if (form.provider_type) {
+    form.endpoints[form.provider_type] = form.base_url
   }
 }
 
@@ -302,11 +283,7 @@ async function testSingleFetchedModel(model: any) {
   try {
     const res = await api.post('/providers/test-model', {
       provider_id: editingId.value || 0,
-      openai_base_url: form.openai_base_url,
-      anthropic_base_url: form.anthropic_base_url,
-      gemini_base_url: form.gemini_base_url,
-      deepseek_base_url: form.deepseek_base_url,
-      openrouter_base_url: form.openrouter_base_url,
+      endpoints: form.endpoints,
       api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
@@ -367,11 +344,7 @@ async function testSingleFetchedModelAsync(model: any, idx: number) {
   try {
     const res = await api.post('/providers/test-model', {
       provider_id: editingId.value || 0,
-      openai_base_url: form.openai_base_url,
-      anthropic_base_url: form.anthropic_base_url,
-      gemini_base_url: form.gemini_base_url,
-      deepseek_base_url: form.deepseek_base_url,
-      openrouter_base_url: form.openrouter_base_url,
+      endpoints: form.endpoints,
       api_key: form.api_key || 'DUMMY_KEY_FOR_EDIT',
       model_id: model.model_id
     })
@@ -448,10 +421,7 @@ async function handleFetchProviderModels() {
   testingConnection.value = true
   try {
     const res = await api.post('/providers/test-connection', {
-      openai_base_url: form.openai_base_url,
-      anthropic_base_url: form.anthropic_base_url,
-      gemini_base_url: form.gemini_base_url,
-      deepseek_base_url: form.deepseek_base_url,
+      endpoints: form.endpoints,
       api_key: form.api_key
     })
     const list = res.data.models || []
@@ -502,11 +472,7 @@ async function handleTestConnection() {
   testingConnection.value = true
   try {
     await api.post('/providers/test-connection', {
-      openai_base_url: form.openai_base_url,
-      anthropic_base_url: form.anthropic_base_url,
-      gemini_base_url: form.gemini_base_url,
-      deepseek_base_url: form.deepseek_base_url,
-      openrouter_base_url: form.openrouter_base_url,
+      endpoints: form.endpoints,
       api_key: form.api_key
     })
     ElMessage.success('连接测试成功！厂商端点及 API Key 校验通过，可以配置和测试模型。')
@@ -538,7 +504,7 @@ async function showDialog(id?: number) {
   selectedPreset.value = ''
   fetchedModels.value = []
   pendingDeleteIds.value = []
-  Object.assign(form, { name: '', openai_base_url: '', anthropic_base_url: '', gemini_base_url: '', deepseek_base_url: '', openrouter_base_url: '', base_url: '', api_key: '', provider_type: '' })
+  Object.assign(form, { name: '', endpoints: {} as Record<string, string>, base_url: '', api_key: '', provider_type: '' })
   dialogVisible.value = true
   
   if (id) {
@@ -547,15 +513,12 @@ async function showDialog(id?: number) {
       const res = await api.get(`/providers/${id}`)
       const provider = res.data.provider
       if (provider) {
-        const type = provider.openai_base_url ? 'openai' : (provider.anthropic_base_url ? 'anthropic' : (provider.gemini_base_url ? 'gemini' : (provider.deepseek_base_url ? 'deepseek' : (provider.openrouter_base_url ? 'openrouter' : ''))))
-        const bUrl = provider.openai_base_url || provider.anthropic_base_url || provider.gemini_base_url || provider.deepseek_base_url || provider.openrouter_base_url || ''
+        const eps = provider.endpoints || {}
+        const type = Object.keys(eps)[0] || ''
+        const bUrl = eps[type] || ''
         Object.assign(form, {
           name: provider.name || '',
-          openai_base_url: provider.openai_base_url || '',
-          anthropic_base_url: provider.anthropic_base_url || '',
-          gemini_base_url: provider.gemini_base_url || '',
-          deepseek_base_url: provider.deepseek_base_url || '',
-          openrouter_base_url: provider.openrouter_base_url || '',
+          endpoints: eps,
           base_url: bUrl,
           api_key: '',
           provider_type: type

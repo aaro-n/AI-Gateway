@@ -49,14 +49,10 @@ type customModelTestRequest struct {
 }
 
 type testProviderModelRequest struct {
-	ProviderID        uint   `json:"provider_id"`
-	OpenAIBaseURL     string `json:"openai_base_url"`
-	AnthropicBaseURL  string `json:"anthropic_base_url"`
-	GeminiBaseURL     string `json:"gemini_base_url"`
-	DeepSeekBaseURL   string `json:"deepseek_base_url"`
-	OpenRouterBaseURL string `json:"openrouter_base_url"`
-	APIKey            string `json:"api_key"`
-	ModelID           string `json:"model_id" binding:"required"`
+	ProviderID uint              `json:"provider_id"`
+	Endpoints  map[string]string `json:"endpoints"` // {"openai":"https://...","gemini":"https://..."}
+	APIKey     string            `json:"api_key"`
+	ModelID    string            `json:"model_id" binding:"required"`
 }
 
 type customModelTestResponse struct {
@@ -94,47 +90,25 @@ func (h *ModelTestHandler) TestCustomModel(c *gin.Context) {
 		ModelID: req.ModelID,
 	}
 
+	protocols := p.SupportedProtocols()
+	results := make([]protocolTestResult, len(protocols))
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult, geminiResult *protocolTestResult
 
-	if p.OpenAIBaseURL != "" {
+	for i, proto := range protocols {
 		wg.Add(1)
-		go func() {
+		go func(idx int, pr string) {
 			defer wg.Done()
-			result := executeTest(&p, pm, "openai")
-			openAIResult = &result
-		}()
-	}
-
-	if p.AnthropicBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(&p, pm, "anthropic")
-			anthropicResult = &result
-		}()
-	}
-
-	if p.GeminiBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(&p, pm, "gemini")
-			geminiResult = &result
-		}()
+			results[idx] = executeTest(&p, pm, pr)
+		}(i, proto)
 	}
 
 	wg.Wait()
 
-	tests := []protocolTestResult{}
-	if openAIResult != nil {
-		tests = append(tests, *openAIResult)
-	}
-	if anthropicResult != nil {
-		tests = append(tests, *anthropicResult)
-	}
-	if geminiResult != nil {
-		tests = append(tests, *geminiResult)
+	tests := make([]protocolTestResult, 0, len(protocols))
+	for _, r := range results {
+		if r.Protocol != "" {
+			tests = append(tests, r)
+		}
 	}
 
 	// 保存测试结果
@@ -162,62 +136,23 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 		return
 	}
 
+	// 将 Endpoints map 序列化为 JSON 存入 Provider
+	endpointsJSON, _ := json.Marshal(req.Endpoints)
 	p := &model.Provider{
-		OpenAIBaseURL:     strings.TrimSuffix(req.OpenAIBaseURL, "/"),
-		AnthropicBaseURL:  strings.TrimSuffix(req.AnthropicBaseURL, "/"),
-		GeminiBaseURL:     strings.TrimSuffix(req.GeminiBaseURL, "/"),
-		DeepSeekBaseURL:   strings.TrimSuffix(req.DeepSeekBaseURL, "/"),
-		OpenRouterBaseURL: strings.TrimSuffix(req.OpenRouterBaseURL, "/"),
-		APIKey:            req.APIKey,
+		Endpoints: string(endpointsJSON),
+		APIKey:    req.APIKey,
 	}
 
-	if req.OpenAIBaseURL == "" && req.AnthropicBaseURL == "" && req.GeminiBaseURL == "" && req.APIKey == "DUMMY_KEY_FOR_EDIT" {
-		// This means we are editing an existing provider and didn't change the credentials. Let's do nothing or fallback
-	}
-
-	// If we are editing (APIKey might be masked or DUMMY_KEY_FOR_EDIT), let's find the existing provider and use its APIKey/URLs
-	// Usually, the frontend can pass provider_id if we want. Let's make it robust:
-	// We can check if APIKey is the dummy key, then we can find provider by name or URL, or let's accept provider_id in request.
-	// Let's check testProviderModelRequest below.
-	// For maximum robustness, if APIKey is "DUMMY_KEY_FOR_EDIT" or empty, and we can find a matching provider by BaseURLs, let's load the saved APIKey.
+	// 如果 APIKey 是 DUMMY_KEY_FOR_EDIT 或为空，从已有 Provider 补齐
 	if req.APIKey == "DUMMY_KEY_FOR_EDIT" || req.APIKey == "" {
-		// 优先通过 provider_id 直接加载
 		if req.ProviderID > 0 {
 			var existing model.Provider
 			if err := model.DB.First(&existing, req.ProviderID).Error; err == nil && existing.APIKey != "" {
 				p.APIKey = existing.APIKey
-				// 也补齐可能缺失的 BaseURL
-				if p.OpenAIBaseURL == "" {
-					p.OpenAIBaseURL = existing.OpenAIBaseURL
+				// 如果前端未传 Endpoints，从已有 Provider 补齐
+				if len(req.Endpoints) == 0 {
+					p.Endpoints = existing.Endpoints
 				}
-				if p.AnthropicBaseURL == "" {
-					p.AnthropicBaseURL = existing.AnthropicBaseURL
-				}
-				if p.GeminiBaseURL == "" {
-					p.GeminiBaseURL = existing.GeminiBaseURL
-				}
-				if p.DeepSeekBaseURL == "" {
-					p.DeepSeekBaseURL = existing.DeepSeekBaseURL
-				}
-				if p.OpenRouterBaseURL == "" {
-					p.OpenRouterBaseURL = existing.OpenRouterBaseURL
-				}
-			}
-		} else {
-			var existing model.Provider
-			if req.OpenAIBaseURL != "" {
-				model.DB.Where("openai_base_url = ?", p.OpenAIBaseURL).First(&existing)
-			} else if req.AnthropicBaseURL != "" {
-				model.DB.Where("anthropic_base_url = ?", p.AnthropicBaseURL).First(&existing)
-			} else if req.GeminiBaseURL != "" {
-				model.DB.Where("gemini_base_url = ?", p.GeminiBaseURL).First(&existing)
-			} else if req.DeepSeekBaseURL != "" {
-				model.DB.Where("deepseek_base_url = ?", p.DeepSeekBaseURL).First(&existing)
-			} else if req.OpenRouterBaseURL != "" {
-				model.DB.Where("openrouter_base_url = ?", p.OpenRouterBaseURL).First(&existing)
-			}
-			if existing.ID > 0 {
-				p.APIKey = existing.APIKey
 			}
 		}
 	}
@@ -227,70 +162,24 @@ func (h *ModelTestHandler) TestUnsavedProviderModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult, geminiResult, deepseekResult, openrouterResult *protocolTestResult
+	protocols := p.SupportedProtocols()
+	results := make([]protocolTestResult, len(protocols))
 
-	if p.OpenAIBaseURL != "" {
+	for i, proto := range protocols {
 		wg.Add(1)
-		go func() {
+		go func(idx int, pr string) {
 			defer wg.Done()
-			result := executeTest(p, pm, "openai")
-			openAIResult = &result
-		}()
-	}
-
-	if p.AnthropicBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(p, pm, "anthropic")
-			anthropicResult = &result
-		}()
-	}
-
-	if p.GeminiBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(p, pm, "gemini")
-			geminiResult = &result
-		}()
-	}
-
-	if p.DeepSeekBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(p, pm, "deepseek")
-			deepseekResult = &result
-		}()
-	}
-
-	if p.OpenRouterBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(p, pm, "openrouter")
-			openrouterResult = &result
-		}()
+			results[idx] = executeTest(p, pm, pr)
+		}(i, proto)
 	}
 
 	wg.Wait()
 
-	tests := []protocolTestResult{}
-	if openAIResult != nil {
-		tests = append(tests, *openAIResult)
-	}
-	if anthropicResult != nil {
-		tests = append(tests, *anthropicResult)
-	}
-	if geminiResult != nil {
-		tests = append(tests, *geminiResult)
-	}
-	if deepseekResult != nil {
-		tests = append(tests, *deepseekResult)
-	}
-	if openrouterResult != nil {
-		tests = append(tests, *openrouterResult)
+	tests := make([]protocolTestResult, 0, len(protocols))
+	for _, r := range results {
+		if r.Protocol != "" {
+			tests = append(tests, r)
+		}
 	}
 
 	// 保存测试结果（ProviderID 可能为 0，表示未保存的 provider）
@@ -329,46 +218,24 @@ func (h *ModelTestHandler) TestProviderModel(c *gin.Context) {
 	}
 
 	var wg sync.WaitGroup
-	var openAIResult, anthropicResult, geminiResult *protocolTestResult
+	protocols := p.SupportedProtocols()
+	results := make([]protocolTestResult, len(protocols))
 
-	if p.OpenAIBaseURL != "" {
+	for i, proto := range protocols {
 		wg.Add(1)
-		go func() {
+		go func(idx int, pr string) {
 			defer wg.Done()
-			result := executeTest(&p, &pm, "openai")
-			openAIResult = &result
-		}()
-	}
-
-	if p.AnthropicBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(&p, &pm, "anthropic")
-			anthropicResult = &result
-		}()
-	}
-
-	if p.GeminiBaseURL != "" {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := executeTest(&p, &pm, "gemini")
-			geminiResult = &result
-		}()
+			results[idx] = executeTest(&p, &pm, pr)
+		}(i, proto)
 	}
 
 	wg.Wait()
 
-	tests := []protocolTestResult{}
-	if openAIResult != nil {
-		tests = append(tests, *openAIResult)
-	}
-	if anthropicResult != nil {
-		tests = append(tests, *anthropicResult)
-	}
-	if geminiResult != nil {
-		tests = append(tests, *geminiResult)
+	tests := make([]protocolTestResult, 0, len(protocols))
+	for _, r := range results {
+		if r.Protocol != "" {
+			tests = append(tests, r)
+		}
 	}
 
 	// 保存测试结果并更新 is_available
@@ -398,12 +265,9 @@ type mappingTestResult struct {
 }
 
 type providerBasicInfo struct {
-	ID               uint   `json:"id"`
-	Name             string `json:"name"`
-	OpenAIBaseURL    string `json:"openai_base_url"`
-	AnthropicBaseURL string `json:"anthropic_base_url"`
-	GeminiBaseURL    string `json:"gemini_base_url"`
-	Enabled          bool   `json:"enabled"`
+	ID      uint   `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
 }
 
 type modelBasicInfo struct {
@@ -462,19 +326,8 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 			defer wg.Done()
 
 			protocolTests := []protocolTestResult{}
-
-			if j.mapping.Provider.OpenAIBaseURL != "" {
-				result := executeTest(j.mapping.Provider, j.pm, "openai")
-				protocolTests = append(protocolTests, result)
-			}
-
-			if j.mapping.Provider.AnthropicBaseURL != "" {
-				result := executeTest(j.mapping.Provider, j.pm, "anthropic")
-				protocolTests = append(protocolTests, result)
-			}
-
-			if j.mapping.Provider.GeminiBaseURL != "" {
-				result := executeTest(j.mapping.Provider, j.pm, "gemini")
+			for _, proto := range j.mapping.Provider.SupportedProtocols() {
+				result := executeTest(j.mapping.Provider, j.pm, proto)
 				protocolTests = append(protocolTests, result)
 			}
 
@@ -482,12 +335,9 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 				MappingID: j.mapping.ID,
 				Weight:    j.mapping.Weight,
 				Provider: providerBasicInfo{
-					ID:               j.mapping.Provider.ID,
-					Name:             j.mapping.Provider.Name,
-					OpenAIBaseURL:    j.mapping.Provider.OpenAIBaseURL,
-					AnthropicBaseURL: j.mapping.Provider.AnthropicBaseURL,
-					GeminiBaseURL:    j.mapping.Provider.GeminiBaseURL,
-					Enabled:          j.mapping.Provider.Enabled,
+					ID:      j.mapping.Provider.ID,
+					Name:    j.mapping.Provider.Name,
+					Enabled: j.mapping.Provider.Enabled,
 				},
 				ProviderModel: modelBasicInfo{
 					ModelID:     j.pm.ModelID,
@@ -510,17 +360,8 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 }
 
 func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) protocolTestResult {
-	result := protocolsPkg.RunTest(
-		protocol,
-		p.OpenAIBaseURL,
-		p.AnthropicBaseURL,
-		p.GeminiBaseURL,
-		p.DeepSeekBaseURL,
-		p.OpenRouterBaseURL,
-		p.APIKey,
-		pm.ModelID,
-	)
-
+	baseURL := p.EndpointFor(protocol)
+	result := protocolsPkg.RunTest(protocol, baseURL, p.APIKey, pm.ModelID)
 	return protocolTestResult{
 		Protocol:     protocol,
 		Success:      result.Success,

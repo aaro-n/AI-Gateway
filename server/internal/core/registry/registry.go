@@ -178,6 +178,9 @@ type ProtocolDescriptor struct {
 	// ── 路由注册（可选，默认用通用路由） ──
 	RegisterRoutes func(engine *gin.Engine, auth gin.HandlerFunc) `json:"-"`
 
+	// ── DB 列名 ──
+	DBColumn string `json:"-"` // 旧扁平列名 "gemini_base_url"；待 JSON Endpoints 迁移后废弃
+
 	// ── 默认值 ──
 	DefaultBaseURL string `json:"default_base_url"`
 

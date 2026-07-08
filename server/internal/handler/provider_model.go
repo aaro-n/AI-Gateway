@@ -312,13 +312,7 @@ func (h *ProviderModelHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	models, err := protocolsPkg.AutoSyncModels(provider.ID,
-		provider.OpenAIBaseURL,
-		provider.AnthropicBaseURL,
-		provider.GeminiBaseURL,
-		provider.DeepSeekBaseURL,
-		provider.APIKey,
-	)
+	models, err := protocolsPkg.AutoSyncModels(provider.ID, provider.EndpointsMap(), provider.APIKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
