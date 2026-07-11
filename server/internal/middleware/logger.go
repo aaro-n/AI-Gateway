@@ -49,14 +49,23 @@ func RequestLogger() gin.HandlerFunc {
 		trimmedReq := trimBody(string(reqBody))
 		trimmedResp := trimBody(blw.body.String())
 
-		if status >= 400 {
+		if status >= 500 {
 			coreErrors.TraceError(traceID,
 				"http_request method=%s path=%s status=%d latency=%v client_ip=%s req=%q resp=%q errors=%q",
 				method, path, status, latency, clientIP, trimmedReq, trimmedResp, c.Errors.String())
-		} else {
+		} else if status >= 400 {
+			coreErrors.TraceWarn(traceID,
+				"http_request method=%s path=%s status=%d latency=%v client_ip=%s req=%q resp=%q errors=%q",
+				method, path, status, latency, clientIP, trimmedReq, trimmedResp, c.Errors.String())
+		} else if strings.HasPrefix(path, "/api/v1/debug/server-logs") {
+			// 轮询端点，噪声过大，降级为 DEBUG
 			coreErrors.TraceDebug(traceID,
-				"http_request method=%s path=%s status=%d latency=%v client_ip=%s req=%q resp=%q",
-				method, path, status, latency, clientIP, trimmedReq, trimmedResp)
+				"http_request method=%s path=%s status=%d latency=%v client_ip=%s resp_bytes=%d",
+				method, path, status, latency, clientIP, blw.body.Len())
+		} else {
+			coreErrors.TraceInfo(traceID,
+				"http_request method=%s path=%s status=%d latency=%v client_ip=%s req=%q resp_bytes=%d",
+				method, path, status, latency, clientIP, trimmedReq, blw.body.Len())
 		}
 	}
 }

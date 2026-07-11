@@ -60,6 +60,9 @@ func main() {
 		}
 	}
 
+	// ── 内存环形日志缓冲区（供调试页面查看运行时日志）──
+	coreErrors.EnableRingBuffer(500)
+
 	// ── OpenTelemetry 初始化 ──
 	ctx := context.Background()
 	otelProviders, err := telemetry.InitOpenTelemetry(ctx, telemetry.Config{
@@ -161,6 +164,7 @@ func main() {
 	mcpHandler := handler.NewMCPHandler()
 	modelTestHandler := handler.NewModelTestHandler()
 	protocolCompareHandler := handler.NewProtocolCompareHandler()
+	debugHandler := handler.NewDebugHandler()
 
 	// Unified Gateway（基于 Registry + Unified 中间表示，轴辐式协议转换）
 	unifiedGatewayHandler := coreHandler.NewUnifiedGatewayHandler()
@@ -309,6 +313,12 @@ func main() {
 			protected.GET("/protocols/compare/:protocol", protocolCompareHandler.GetProtocolCaps)
 			protected.GET("/protocols/compare-between/:from/:to", protocolCompareHandler.Compare)
 			protected.GET("/protocols/compare-all", protocolCompareHandler.CompareAll)
+
+			// ── 调试工具：测试供应商、测试密钥、运行日志 ──
+			protected.POST("/debug/test-providers", debugHandler.TestProviders)
+			protected.POST("/debug/test-key", debugHandler.TestKey)
+			protected.GET("/debug/recent-logs", debugHandler.RecentLogs)
+			protected.GET("/debug/server-logs", debugHandler.ServerLogs)
 			// ── Prometheus Metrics 端点 ──
 			if cfg.Monitor.Prometheus.Enabled {
 				if token := cfg.Monitor.Prometheus.MetricsToken; token != "" {

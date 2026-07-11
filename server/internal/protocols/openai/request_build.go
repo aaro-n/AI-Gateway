@@ -39,6 +39,7 @@ func (p *OpenAIProvider) FromUnified(req *unified.Request) (*unified.Response, <
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		p.lastRawResponse = respBody
 		return nil, nil, &registry.HTTPError{StatusCode: resp.StatusCode, Body: respBody}
 	}
 
@@ -52,6 +53,7 @@ func (p *OpenAIProvider) FromUnified(req *unified.Request) (*unified.Response, <
 	if err != nil {
 		return nil, nil, err
 	}
+	p.lastRawResponse = respBody
 	uresp, err := p.parseOpenAIResponse(respBody)
 	return uresp, nil, err
 }

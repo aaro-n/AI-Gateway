@@ -12,9 +12,13 @@ import (
 
 // GeminiProvider Gemini 协议实现
 type GeminiProvider struct {
-	cfg      *registry.Config
-	httpPool *http.Client
+	cfg             *registry.Config
+	httpPool        *http.Client
+	lastRawResponse []byte // 最近一次 FromUnified 的原始响应体（供调试）
 }
+
+// LastRawResponse 实现 registry.RawResponseCapturer
+func (p *GeminiProvider) LastRawResponse() []byte { return p.lastRawResponse }
 
 // NewGeminiProvider 创建 Gemini Provider
 func NewGeminiProvider(cfg *registry.Config) *GeminiProvider {

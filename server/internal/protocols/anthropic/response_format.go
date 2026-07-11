@@ -20,6 +20,8 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 		// 非流式
 		usage.InputTokens = resp.Usage.InputTokens
 		usage.OutputTokens = resp.Usage.OutputTokens
+		usage.CacheHitTokens = resp.Usage.CacheHitTokens
+		usage.CacheMissTokens = resp.Usage.CacheMissTokens
 
 		contentBlocks := make([]map[string]interface{}, 0)
 		// thinking 块 — 从 ReasoningContent
@@ -289,6 +291,8 @@ func (p *AnthropicProvider) FormatUnified(resp *unified.Response, events <-chan 
 	}
 	usage.InputTokens = inputTokens
 	usage.OutputTokens = outputTokens
+	// 流式路径：Cache 用量从 unified.Usage 中提取（流式 events 不区分 cache hit/miss，
+	// 但 Anthropic SDK 的 message 级别才提供这部分数据，流式不进 SDK 所以为 0）
 	return nil
 }
 

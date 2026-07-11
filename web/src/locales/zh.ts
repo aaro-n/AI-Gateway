@@ -54,6 +54,7 @@ export default {
     model_usage: '模型用量',
     mcp_usage: 'MCP用量',
     protocol_compare: '协议对比',
+    debug: '调试',
     settings: '系统设置'
   },
   dashboard: {
@@ -302,5 +303,34 @@ export default {
     startTime: '开始时间',
     endTime: '结束时间',
     time: '时间'
+  },
+  debug: {
+    title: '调试工具',
+    intro: '测试模型供应商连接、模拟客户端 API 密钥访问，以及查看最近运行日志。',
+    providerTest: '测试模型供应商',
+    keyTest: '测试 API 密钥',
+    runtimeLogs: '运行日志',
+    selectProvider: '选择厂商（留空测试全部）',
+    selectKey: '选择密钥',
+    modelPlaceholder: '模型名（选填，默认 gpt-4o）',
+    test: '测试',
+    testAll: '测试全部',
+    pass: '通过',
+    fail: '失败',
+    time: '时间',
+    key: '密钥',
+    model: '模型',
+    provider: '厂商',
+    latency: '耗时',
+    tokens: 'Tokens',
+    conversionLabel: '协议转换',
+    errorMsg: '错误信息',
+    refresh: '刷新',
+    requestLogs: '请求日志',
+    responseLogs: '响应日志',
+    runLog: '运行日志',
+    serverLogs: '服务运行日志',
+    noData: '暂无数据',
+    noServerLogs: '暂无运行日志'
   }
 }

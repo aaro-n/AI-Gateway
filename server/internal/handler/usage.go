@@ -367,6 +367,7 @@ type modelLogResponse struct {
 	LatencyMs       int       `json:"latency_ms"`
 	Status          string    `json:"status"`
 	ErrorMsg        string    `json:"error_msg"`
+	ConvStatus      string    `json:"conv_status"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 
@@ -420,6 +421,7 @@ func (h *UsageHandler) ModelLogs(c *gin.Context) {
 			LatencyMs:       log.LatencyMs,
 			Status:          log.Status,
 			ErrorMsg:        log.ErrorMsg,
+			ConvStatus:      log.ConvStatus,
 			CreatedAt:       log.CreatedAt,
 		}
 	}

@@ -54,6 +54,7 @@ export default {
     model_usage: 'Model Usage',
     mcp_usage: 'MCP Usage',
     protocol_compare: 'Protocol Compare',
+    debug: 'Debug',
     settings: 'Settings'
   },
   dashboard: {
@@ -272,5 +273,34 @@ export default {
     sameProtoHint: 'Direct {name} protocol passthrough — client and backend use the same protocol, all native capabilities are fully available with no feature loss.',
     dualCompare: 'Dual Compare',
     noData: 'Please select two protocols'
+  },
+  debug: {
+    title: 'Debug Tools',
+    intro: 'Test model provider connectivity, simulate client API key access, and view recent runtime logs.',
+    providerTest: 'Test Providers',
+    keyTest: 'Test API Keys',
+    runtimeLogs: 'Runtime Logs',
+    selectProvider: 'Select provider (empty = test all)',
+    selectKey: 'Select key',
+    modelPlaceholder: 'Model name (optional, default gpt-4o)',
+    test: 'Test',
+    testAll: 'Test All',
+    pass: 'Pass',
+    fail: 'Fail',
+    time: 'Time',
+    key: 'Key',
+    model: 'Model',
+    provider: 'Provider',
+    latency: 'Latency',
+    tokens: 'Tokens',
+    conversionLabel: 'Conversion',
+    errorMsg: 'Error',
+    refresh: 'Refresh',
+    requestLogs: 'Request Log',
+    responseLogs: 'Response Log',
+    runLog: 'Run Log',
+    serverLogs: 'Server Logs',
+    noData: 'No data',
+    noServerLogs: 'No server logs'
   }
 }

@@ -98,6 +98,12 @@ type Provider interface {
 	FormatUnified(resp *unified.Response, events <-chan unified.StreamEvent, dst *gin.Context, usage *Usage) error
 }
 
+// RawResponseCapturer 可选接口：允许 Provider 暴露最近一次 FromUnified 的原始响应体。
+// 供调试/测试使用，不影响正常请求流程。
+type RawResponseCapturer interface {
+	LastRawResponse() []byte
+}
+
 // =============================================================================
 // Inbound / Outbound — 可选的职责分离接口 (AxonHub 风格)
 //

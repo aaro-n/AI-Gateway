@@ -69,6 +69,56 @@ func buildEndpoints(eps map[string]string) string {
 	return string(b)
 }
 
+// findStoredAPIKey 从数据库已有 provider 中查找匹配的 API Key。
+// 优先匹配 endpoints JSON 列（新存储方式），其次匹配扁平列（向后兼容）。
+func findStoredAPIKey(openaiURL, anthropicURL, geminiURL, deepseekURL, openrouterURL string) string {
+	var providers []model.Provider
+	model.DB.Find(&providers)
+
+	urls := map[string]string{
+		"openai":     openaiURL,
+		"anthropic":  anthropicURL,
+		"gemini":     geminiURL,
+		"deepseek":   deepseekURL,
+		"openrouter": openrouterURL,
+	}
+
+	for _, p := range providers {
+		if p.APIKey == "" {
+			continue
+		}
+		// 1) 检查 endpoints JSON 列
+		epsMap := p.EndpointsMap()
+		for name, url := range urls {
+			if url == "" {
+				continue
+			}
+			epURL, ok := epsMap[name]
+			if ok && strings.TrimSuffix(epURL, "/") == url {
+				return p.APIKey
+			}
+		}
+		// 2) 向后兼容：检查扁平列
+		flatChecks := map[string]string{
+			"openai":     p.OpenAIBaseURL,
+			"anthropic":  p.AnthropicBaseURL,
+			"gemini":     p.GeminiBaseURL,
+			"deepseek":   p.DeepSeekBaseURL,
+			"openrouter": p.OpenRouterBaseURL,
+		}
+		for name, url := range urls {
+			if url == "" {
+				continue
+			}
+			flatURL, ok := flatChecks[name]
+			if ok && strings.TrimSuffix(flatURL, "/") == url {
+				return p.APIKey
+			}
+		}
+	}
+	return ""
+}
+
 func (h *ProviderHandler) List(c *gin.Context) {
 	var providers []model.Provider
 	if err := model.DB.Preload("Models").Order("name ASC").Find(&providers).Error; err != nil {
@@ -356,24 +406,36 @@ func (h *ProviderHandler) TestConnection(c *gin.Context) {
 	geminiURL := strings.TrimSuffix(req.GeminiBaseURL, "/")
 	deepseekURL := strings.TrimSuffix(req.DeepSeekBaseURL, "/")
 	openrouterURL := strings.TrimSuffix(req.OpenRouterBaseURL, "/")
+
+	// 前端可能通过 endpoints map（而非扁平字段）传参，需要从 map 中补充
+	if req.Endpoints != nil {
+		if v, ok := req.Endpoints["openai"]; ok && openaiURL == "" {
+			openaiURL = strings.TrimSuffix(v, "/")
+		}
+		if v, ok := req.Endpoints["anthropic"]; ok && anthropicURL == "" {
+			anthropicURL = strings.TrimSuffix(v, "/")
+		}
+		if v, ok := req.Endpoints["gemini"]; ok && geminiURL == "" {
+			geminiURL = strings.TrimSuffix(v, "/")
+		}
+		if v, ok := req.Endpoints["deepseek"]; ok && deepseekURL == "" {
+			deepseekURL = strings.TrimSuffix(v, "/")
+		}
+		if v, ok := req.Endpoints["openrouter"]; ok && openrouterURL == "" {
+			openrouterURL = strings.TrimSuffix(v, "/")
+		}
+	}
+
 	apiKey := req.APIKey
 
 	if apiKey == "DUMMY_KEY_FOR_EDIT" || apiKey == "" {
-		var existing model.Provider
-		if openaiURL != "" {
-			model.DB.Where("openai_base_url = ?", openaiURL).First(&existing)
-		} else if anthropicURL != "" {
-			model.DB.Where("anthropic_base_url = ?", anthropicURL).First(&existing)
-		} else if geminiURL != "" {
-			model.DB.Where("gemini_base_url = ?", geminiURL).First(&existing)
-		} else if deepseekURL != "" {
-			model.DB.Where("deepseek_base_url = ?", deepseekURL).First(&existing)
-		} else if openrouterURL != "" {
-			model.DB.Where("openrouter_base_url = ?", openrouterURL).First(&existing)
-		}
-		if existing.ID > 0 {
-			apiKey = existing.APIKey
-		}
+		apiKey = findStoredAPIKey(openaiURL, anthropicURL, geminiURL, deepseekURL, openrouterURL)
+	}
+
+	// 若仍无 API Key 且端点非空，提前返回友好错误
+	if apiKey == "" && (openaiURL != "" || anthropicURL != "" || geminiURL != "" || deepseekURL != "" || openrouterURL != "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Connection test failed: API key is required. Please enter your API key."})
+		return
 	}
 
 	// OpenRouter 不支持批量同步，单独处理连接测试

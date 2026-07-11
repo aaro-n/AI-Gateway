@@ -361,7 +361,7 @@ func (h *ModelTestHandler) TestModel(c *gin.Context) {
 
 func executeTest(p *model.Provider, pm *model.ProviderModel, protocol string) protocolTestResult {
 	baseURL := p.EndpointFor(protocol)
-	result := protocolsPkg.RunTest(protocol, baseURL, p.APIKey, pm.ModelID)
+	result := protocolsPkg.RunTest(protocol, baseURL, p.APIKey, pm.ModelID, 5)
 	return protocolTestResult{
 		Protocol:     protocol,
 		Success:      result.Success,

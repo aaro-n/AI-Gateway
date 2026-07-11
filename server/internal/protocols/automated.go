@@ -18,6 +18,8 @@ func AutoSyncModels(providerID uint, endpoints map[string]string, apiKey string)
 	// 优先级: Gemini → Anthropic → OpenAI → DeepSeek
 	priorityOrder := []string{"gemini", "anthropic", "openai", "deepseek"}
 
+	var lastErr error
+
 	// 1. 优先尝试用户已配置的自定义端点
 	for _, name := range priorityOrder {
 		baseURL, ok := endpoints[name]
@@ -33,7 +35,12 @@ func AutoSyncModels(providerID uint, endpoints map[string]string, apiKey string)
 			APIKey:  apiKey,
 		})
 		registryModels, err := prov.SyncModels(providerID)
-		if err != nil || len(registryModels) == 0 {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(registryModels) == 0 {
+			lastErr = fmt.Errorf("provider %s returned empty model list", name)
 			continue
 		}
 		return convertModels(registryModels), nil
@@ -53,12 +60,20 @@ func AutoSyncModels(providerID uint, endpoints map[string]string, apiKey string)
 			APIKey:  apiKey,
 		})
 		registryModels, err := prov.SyncModels(providerID)
-		if err != nil || len(registryModels) == 0 {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(registryModels) == 0 {
+			lastErr = fmt.Errorf("provider %s returned empty model list (default URL)", name)
 			continue
 		}
 		return convertModels(registryModels), nil
 	}
 
+	if lastErr != nil {
+		return nil, fmt.Errorf("no valid models found: %v", lastErr)
+	}
 	return nil, fmt.Errorf("no valid models found")
 }
 

@@ -87,7 +87,7 @@ func init() {
 		level = slog.LevelDebug
 	}
 	h := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	gLogger.Store(slog.New(h))
+	gLogger.Store(slog.New(&ringBufferHandler{next: h}))
 	gHandler.Store(&shWrapper{handler: h, level: level})
 }
 
@@ -96,7 +96,7 @@ func logger() *slog.Logger { return gLogger.Load().(*slog.Logger) }
 func SetLevel(l Level) {
 	level := toSlogLevel(l)
 	h := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	gLogger.Store(slog.New(h))
+	gLogger.Store(slog.New(&ringBufferHandler{next: h}))
 	gHandler.Store(&shWrapper{handler: h, level: level})
 }
 
@@ -120,7 +120,7 @@ func SetOutput(w io.Writer) {
 	}
 	sh := gHandler.Load().(*shWrapper)
 	h := slog.NewTextHandler(w, &slog.HandlerOptions{Level: sh.level})
-	gLogger.Store(slog.New(h))
+	gLogger.Store(slog.New(&ringBufferHandler{next: h}))
 	gHandler.Store(&shWrapper{handler: h, level: sh.level})
 }
 

@@ -44,6 +44,10 @@
             <el-icon><Sort /></el-icon>
             <template #title>{{ t('menu.protocol_compare') }}</template>
           </el-menu-item>
+          <el-menu-item index="/debug">
+            <el-icon><Cpu /></el-icon>
+            <template #title>{{ t('menu.debug') }}</template>
+          </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon><Tools /></el-icon>
             <template #title>{{ t('menu.settings') }}</template>
