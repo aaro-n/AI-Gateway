@@ -645,7 +645,7 @@ func buildCurlCommand(protocol, baseURL, apiKey, modelID string, reqBody []byte)
 	switch protocol {
 	case "anthropic":
 		sb.WriteString(fmt.Sprintf(" \\\n  -H \"x-api-key: %s\"", maskKey(apiKey)))
-		sb.WriteString(fmt.Sprintf(" \\\n  -H \"anthropic-version: 2023-06-01\""))
+		sb.WriteString(" \\\n  -H \"anthropic-version: 2023-06-01\"")
 	}
 
 	// 格式化 body 为 multiline curl 风格

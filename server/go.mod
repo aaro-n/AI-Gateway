@@ -67,7 +67,6 @@ require (
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.54.0 // indirect
-	github.com/sashabaranov/go-openai v1.41.2 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
