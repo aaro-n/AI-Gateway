@@ -1,13 +1,30 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Project context
+context: |
+  ## Tech Stack
+  - Backend: Go 1.24+, Gin, GORM, SQLite/PostgreSQL
+  - Frontend: Vue 3, TypeScript, Vite, Element Plus
+  - Protocol: OpenAPI 3.0 REST + MCP JSON-RPC 2.0
+  
+  ## Architecture
+  - Hub-and-spoke: UnifiedRequest/Response intermediate representation
+  - Protocol plugins: openai, anthropic, gemini, deepseek, openrouter
+  - MCP proxy: tools, resources, prompts via HTTP/SSE + stdio
+  - Router: 3 access modes (mapping, direct, hybrid)
+  - Circuit breaker: per-provider-model cooldown on 429 errors
+  
+  ## Conventions
+  - Database: GORM auto-migrate, soft-delete on business entities
+  - API: RESTful under /api/v1, gateway routes under /gateway/{protocol}
+  - Auth: API key (sk-/sk-ant-/AIza prefix) + session-based admin
+  - Config: config.yaml + AG_ prefixed env var overrides
+  
+  ## Domain
+  - AI Gateway: Unified API proxy for multiple LLM providers
+  - Key features: protocol conversion, model mapping, MCP integration
+  - Target users: Teams behind corporate firewalls needing centralized LLM access
+
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
