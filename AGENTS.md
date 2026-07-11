@@ -8,7 +8,9 @@ Before working on any code in this repository, you MUST:
 
 3. **Check the change history**: Before fixing a bug, check `openspec/changes/archive/` for prior fixes. Many edge cases have been documented there (e.g., `TestConnection` endpoints-map bug, Gemini 2.5 Pro empty response, logging overhaul).
 
-4. **Do NOT skip these steps** even if the user doesn't explicitly ask. They are critical for understanding the codebase and avoiding regressions.
+4. **Archive every change before pushing**: After making code changes and committing, create a dated archive entry under `openspec/changes/archive/YYYY-MM-DD-<slug>/` with `.openspec.yaml`, `proposal.md`, and `tasks.md`. Follow the same format as existing entries. Commit the archive separately before `git push`. Do NOT skip this step even if the user doesn't ask.
+
+5. **Do NOT skip these steps** even if the user doesn't explicitly ask. They are critical for understanding the codebase and avoiding regressions.
 
 ## Key Architecture Facts (from openspec/config.yaml)
 
