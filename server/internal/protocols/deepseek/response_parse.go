@@ -1,8 +1,8 @@
 package deepseek
 
 import (
-	"encoding/json"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
 )
 
 // =============================================================================
@@ -57,5 +57,3 @@ func (p *DeepSeekProvider) parseDeepSeekResponse(body []byte) (*unified.Response
 	}
 	return uresp, nil
 }
-
-

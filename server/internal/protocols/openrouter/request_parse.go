@@ -1,10 +1,10 @@
 package openrouter
 
 import (
-	"fmt"
-	"encoding/json"
-	"strings"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // =============================================================================
@@ -90,5 +90,3 @@ func (p *OpenRouterProvider) ToUnified(body []byte, modelID string) (*unified.Re
 	}
 	return req, nil
 }
-
-

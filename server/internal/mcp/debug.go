@@ -21,12 +21,14 @@ type debugReader struct {
 	file *os.File
 }
 
-func (r *debugReader) Read(p []byte) (len int, err error) {
-	len, err = r.src.Read(p)
-	if len > 0 {
-		r.file.Write(p)
+func (r *debugReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	if n > 0 {
+		if _, werr := r.file.Write(p[:n]); werr != nil {
+			return n, werr
+		}
 	}
-	return len, err
+	return n, err
 }
 
 type debugWriter struct {
@@ -34,39 +36,68 @@ type debugWriter struct {
 	file *os.File
 }
 
-func (w *debugWriter) Write(p []byte) (n int, err error) {
-	w.file.Write(p)
+func (w *debugWriter) Write(p []byte) (int, error) {
+	if _, err := w.file.Write(p); err != nil {
+		return 0, err
+	}
 	return w.dst.Write(p)
 }
 
-func recordRemoteReq(body []byte) {
+// ensureDebugDir creates the debug log directory if debug mode is enabled.
+// Returns the directory path on success, or an empty string if debug is
+// disabled. Errors from MkdirAll are propagated so callers can fail loudly
+// instead of silently writing to a missing directory.
+func ensureDebugDir() (string, error) {
 	if !debugEnabled {
+		return "", nil
+	}
+	if err := os.MkdirAll(DEBUG_DIR, 0755); err != nil {
+		return "", err
+	}
+	return DEBUG_DIR, nil
+}
+
+func recordRemoteReq(body []byte) {
+	dir, err := ensureDebugDir()
+	if err != nil || dir == "" {
 		return
 	}
-	os.MkdirAll(DEBUG_DIR, 0755)
 	timestamp := time.Now().Format("20060102150405.000")
-	reqFile, _ := os.OpenFile(filepath.Join(DEBUG_DIR, timestamp+"_remote_req.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	reqFile, err := os.OpenFile(filepath.Join(dir, timestamp+"_remote_req.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
 	defer reqFile.Close()
 	io.Copy(reqFile, bytes.NewReader(body))
 }
 
 func recordRemoteResp(body io.Reader) io.Reader {
-	if !debugEnabled {
+	dir, err := ensureDebugDir()
+	if err != nil || dir == "" {
 		return body
 	}
-	os.MkdirAll(DEBUG_DIR, 0755)
 	timestamp := time.Now().Format("20060102150405.000")
-	respFile, _ := os.OpenFile(filepath.Join(DEBUG_DIR, timestamp+"_remote_resp.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	respFile, err := os.OpenFile(filepath.Join(dir, timestamp+"_remote_resp.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return body
+	}
 	return &debugReader{src: body, file: respFile}
 }
 
 func recordLocalStream(stdin io.Writer, stdout io.Reader) (io.Writer, io.Reader) {
-	if !debugEnabled {
+	dir, err := ensureDebugDir()
+	if err != nil || dir == "" {
 		return stdin, stdout
 	}
- 	os.MkdirAll(DEBUG_DIR, 0755)
 	timestamp := time.Now().Format("20060102150405.000")
-	stdinLogFile, _ := os.OpenFile(filepath.Join(DEBUG_DIR, timestamp+"_local_stdin.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	stdoutLogFile, _ := os.OpenFile(filepath.Join(DEBUG_DIR, timestamp+"_local_stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	stdinLogFile, err := os.OpenFile(filepath.Join(dir, timestamp+"_local_stdin.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return stdin, stdout
+	}
+	stdoutLogFile, err := os.OpenFile(filepath.Join(dir, timestamp+"_local_stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		stdinLogFile.Close()
+		return stdin, stdout
+	}
 	return &debugWriter{dst: stdin, file: stdinLogFile}, &debugReader{src: stdout, file: stdoutLogFile}
 }

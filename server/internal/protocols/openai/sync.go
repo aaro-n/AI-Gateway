@@ -170,4 +170,3 @@ func (p *OpenAIProvider) SyncModels(providerID uint) ([]registry.ProviderModel, 
 }
 
 // =============================================================================
-

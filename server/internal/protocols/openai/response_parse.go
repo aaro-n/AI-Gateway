@@ -1,8 +1,8 @@
 package openai
 
 import (
-	"encoding/json"
 	"ai-gateway/internal/core/unified"
+	"encoding/json"
 )
 
 func (p *OpenAIProvider) parseOpenAIResponse(body []byte) (*unified.Response, error) {
@@ -45,5 +45,3 @@ func (p *OpenAIProvider) parseOpenAIResponse(body []byte) (*unified.Response, er
 // =============================================================================
 // 流式：OpenAI SSE → unified.StreamEvent chan
 // =============================================================================
-
-

@@ -1,12 +1,12 @@
 package deepseek
 
 import (
+	"ai-gateway/internal/core/registry"
+	"ai-gateway/internal/core/unified"
+	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
-	"encoding/json"
-	"ai-gateway/internal/core/registry"
-	"ai-gateway/internal/core/unified"
 )
 
 // =============================================================================
@@ -191,5 +191,3 @@ func (p *DeepSeekProvider) buildDeepSeekMessage(resp *unified.Response) map[stri
 	}
 	return msg
 }
-
-

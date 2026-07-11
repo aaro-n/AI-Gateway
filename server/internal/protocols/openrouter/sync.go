@@ -191,5 +191,3 @@ func LookupModelsBatch(baseURL, apiKey string, modelIDs []string) ([]registry.Pr
 
 	return results, errors
 }
-
-

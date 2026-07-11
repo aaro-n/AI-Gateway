@@ -67,7 +67,7 @@ func GetID(c *gin.Context) (uint, error) {
 }
 
 func GetIDParam(c *gin.Context, name string) (uint, error) {
-	if v, exists := c.Get("resolved_"+name); exists {
+	if v, exists := c.Get("resolved_" + name); exists {
 		return v.(uint), nil
 	}
 	return parseUint(c.Param(name))

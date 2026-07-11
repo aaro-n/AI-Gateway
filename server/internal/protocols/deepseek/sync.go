@@ -103,5 +103,3 @@ func (p *DeepSeekProvider) SyncModels(providerID uint) ([]registry.ProviderModel
 	}
 	return models, nil
 }
-
-
