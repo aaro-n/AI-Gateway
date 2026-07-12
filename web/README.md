@@ -18,11 +18,12 @@ docker run -d -p 18080:18080 ghcr.io/aaro-n/ai-gateway:latest
 | 环境变量 | 必填 | 默认值 | 说明 |
 |----------|:----:|--------|------|
 | `AG_DATABASE_TYPE` | ✓ | `sqlite` | `postgres` 或 `sqlite` |
-| `AG_DATABASE_HOST` | PG | — | PostgreSQL 主机地址 |
-| `AG_DATABASE_PORT` | PG | `5432` | PostgreSQL 端口 |
-| `AG_DATABASE_USERNAME` | PG | — | PostgreSQL 用户名 |
-| `AG_DATABASE_PASSWORD` | PG | — | PostgreSQL 密码 |
-| `AG_DATABASE_DBNAME` | PG | — | PostgreSQL 数据库名 |
+| `AG_DATABASE_URL` | — | — | PostgreSQL 连接 URL/DSN（推荐，优先级高于字段） |
+| `AG_DATABASE_HOST` | — | — | PostgreSQL 主机地址（`url` 为空时使用） |
+| `AG_DATABASE_PORT` | — | `5432` | PostgreSQL 端口 |
+| `AG_DATABASE_USERNAME` | — | — | PostgreSQL 用户名 |
+| `AG_DATABASE_PASSWORD` | — | — | PostgreSQL 密码 |
+| `AG_DATABASE_DBNAME` | — | — | PostgreSQL 数据库名 |
 | `AG_ADMIN_USERNAME` | 建议 | `admin` | 管理员账号 |
 | `AG_ADMIN_PASSWORD` | 建议 | `admin` | **生产环境务必修改** |
 | `AG_SERVER_SESSION_SECRET` | — | 自动生成 | 会话加密密钥 |
