@@ -37,11 +37,35 @@ cp .env.example .env
 docker compose up -d
 ```
 
-### 拉取指定版本
+### 获取 Docker 镜像
+
+所有镜像推送到 [GitHub Container Registry (GHCR)](https://github.com/aaro-n/AI-Gateway/pkgs/container/ai-gateway)。
 
 ```bash
-docker pull ghcr.io/aaro-n/ai-gateway:test       # 测试版（每次 push 构建）
-docker pull ghcr.io/aaro-n/ai-gateway:prerelease  # 预发行通用版
-docker pull ghcr.io/aaro-n/ai-gateway:latest      # 正式发行通用版
-docker pull ghcr.io/aaro-n/ai-gateway:v1.0.0      # 指定版本
+# 登录 GHCR（需要 GitHub Personal Access Token，read:packages 权限）
+echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+
+# 拉取镜像
+docker pull ghcr.io/aaro-n/ai-gateway:test        # 测试版（每次 push 构建，仅 amd64）
+docker pull ghcr.io/aaro-n/ai-gateway:prerelease   # 预发行通用版（amd64 + arm64）
+docker pull ghcr.io/aaro-n/ai-gateway:latest       # 正式发行通用版（amd64 + arm64）
+docker pull ghcr.io/aaro-n/ai-gateway:v0.0.1-rc3   # 指定版本号
+
+# 直接运行
+docker run -d -p 18080:18080 ghcr.io/aaro-n/ai-gateway:latest
 ```
+
+#### 架构支持
+
+| 镜像标签 | linux/amd64 | linux/arm64 |
+|----------|:-----------:|:-----------:|
+| `:test` | ✅ | ❌ |
+| `:prerelease` | ✅ | ✅ |
+| `:latest` | ✅ | ✅ |
+| `:v*` | ✅ | ✅ |
+
+> Docker 会自动根据你的机器架构拉取匹配的镜像层。
+
+### 二进制文件（GitHub Release）
+
+每次版本发布（`v*` tag）会自动构建 Windows/Linux 二进制文件并上传到 [Releases 页面](https://github.com/aaro-n/AI-Gateway/releases)。
