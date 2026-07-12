@@ -1,0 +1,31 @@
+# Docker build context — 排除不需要发送到 Docker daemon 的文件
+
+# PostgreSQL 数据目录（本地开发数据）
+pgdata/
+*.db
+
+# 环境配置（通过环境变量注入）
+.env
+
+# Node.js
+web/node_modules/
+
+# 构建产物
+server/bin/
+server/res/web/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Debug
+debug_model/
+debug_mcp/

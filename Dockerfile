@@ -41,7 +41,10 @@ COPY . .
 RUN make build-web VERSION=${VERSION}
 
 # 构建 Linux 二进制（CGO_ENABLED=1，嵌入前端资源）
+# CGO_CFLAGS="-D_LARGEFILE64_SOURCE" 修复 SQLite 在 Alpine musl 上的编译错误
+#   pread64/pwrite64/off64_t 是 glibc 特有符号，musl 需要此宏
 RUN cd server && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    CGO_CFLAGS="-D_LARGEFILE64_SOURCE" \
     go build -ldflags "-X ai-gateway/res.Version=${VERSION} -s -w" \
     -o bin/ai-gateway-server -v ./cmd/server/main.go
 
