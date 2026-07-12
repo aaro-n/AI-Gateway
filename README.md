@@ -254,6 +254,7 @@ server:
 database:
   type: sqlite    # 数据库类型 (sqlite/postgres)
   path: data.db   # SQLite 数据库路径
+  url: ""         # PostgreSQL 连接 URL（优先级高于 host/port/username/password/dbname）
   pool:
     max_open: 20  # 最大连接数
     max_idle: 5   # 最大空闲连接数
@@ -301,7 +302,8 @@ config_reload_interval: 30s  # 配置热重载间隔
 | `AG_PPROF_PORT` | `6060` | Pprof 性能分析端口 |
 | `AG_DATABASE_TYPE` | `sqlite` | 数据库类型 (sqlite/postgres) |
 | `AG_DATABASE_PATH` | `data.db` | SQLite 数据库路径 |
-| `AG_DATABASE_HOST` | `localhost` | PostgreSQL 服务器地址 |
+| `AG_DATABASE_URL` | `""` | PostgreSQL 连接 URL/DSN（如 `postgres://user:pass@host:5432/db`），优先级高于下方字段 |
+| `AG_DATABASE_HOST` | `localhost` | PostgreSQL 服务器地址（URL 为空时使用） |
 | `AG_DATABASE_PORT` | `5432` | PostgreSQL 服务器端口 |
 | `AG_DATABASE_USERNAME` | `postgres` | PostgreSQL 用户名 |
 | `AG_DATABASE_PASSWORD` | `""` | PostgreSQL 密码 |
