@@ -48,6 +48,26 @@ func RequireAuth() gin.HandlerFunc {
 		}
 
 		c.Set("user_id", userID)
+		c.Set("role", session.Get("role"))
+		c.Next()
+	}
+}
+
+// RequireAdmin 仅允许 admin 角色访问。
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		roleVal, exists := c.Get("role")
+		if !exists {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin required"})
+			c.Abort()
+			return
+		}
+		role, ok := roleVal.(string)
+		if !ok || role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "admin required"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }

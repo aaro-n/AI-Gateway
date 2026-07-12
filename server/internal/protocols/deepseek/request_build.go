@@ -3,6 +3,7 @@ package deepseek
 import (
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/core/unified/thinking"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -125,6 +126,19 @@ func (p *DeepSeekProvider) unifiedToDeepSeek(req *unified.Request) map[string]in
 	}
 	if req.ReasoningEffort != "" {
 		result["reasoning_effort"] = req.ReasoningEffort
+	}
+	// 思考管道 — ThkConfig 覆盖优先
+	if cfg := req.ThkConfig; cfg != nil {
+		switch cfg.Mode {
+		case thinking.ModeBudget:
+			result["reasoning_budget"] = cfg.Budget
+		case thinking.ModeLevel:
+			result["reasoning_effort"] = cfg.Level
+		case thinking.ModeAuto:
+			// auto — 不设置 effort，让 DeepSeek 自行决定
+		case thinking.ModeNone:
+			result["reasoning_effort"] = "none"
+		}
 	}
 	if req.Stream {
 		result["stream_options"] = map[string]bool{"include_usage": true}

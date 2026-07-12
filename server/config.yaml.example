@@ -52,6 +52,11 @@ server:
                         # Full list: see IANA Time Zone Database (tzdata)
                         # Environment variable: AG_TIME_ZONE
   
+  domain: ""           # Server public domain for generating reset-password links, etc.
+                        # If empty, falls back to localhost:port
+                        # Example: "https://my-gateway.example.com"
+                        # Environment variable: AG_SERVER_DOMAIN
+  
   # Session Configuration
   # Controls user session management
   session:
@@ -147,3 +152,33 @@ auth:
                         # Environment variable: AG_ADMIN_USERNAME
     password: admin     # Default admin password
                         # Environment variable: AG_ADMIN_PASSWORD
+
+# SMTP Email Configuration
+# Used for password reset emails and notifications.
+# Supports STARTTLS (port 587) and direct TLS (port 465).
+smtp:
+  enabled: false        # Enable email sending
+                        # Environment variable: AG_SMTP_ENABLED
+
+  host: smtp.example.com  # SMTP server hostname
+                        # Environment variable: AG_SMTP_HOST
+
+  port: 587             # SMTP port (587 = STARTTLS, 465 = TLS)
+                        # Environment variable: AG_SMTP_PORT
+
+  username: user@example.com  # SMTP authentication username
+                        # Environment variable: AG_SMTP_USERNAME
+
+  password: your-password  # SMTP authentication password / app password
+                        # Environment variable: AG_SMTP_PASSWORD
+
+  from: "AI Gateway <noreply@example.com>"  # Sender email address
+                        # Environment variable: AG_SMTP_FROM
+
+  use_tls: false        # Use direct TLS (port 465) instead of STARTTLS
+                        # Environment variable: AG_SMTP_USE_TLS
+
+  log_reset_link: false # Log password reset links to console (for admin access via docker logs)
+                        # When enabled, reset links are printed to stderr regardless of SMTP availability.
+                        # Useful when SMTP is not configured or for two-step verification workflows.
+                        # Environment variable: AG_SMTP_LOG_RESET_LINK

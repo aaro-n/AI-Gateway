@@ -1,69 +1,136 @@
-# Vue 3 + TypeScript + Vite
+# AI Gateway Web 前端
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+基于 Vue 3 + TypeScript + Vite + Element Plus 的管理控制台。
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## 页面结构
 
-## Docker 部署 — 最小环境变量
+| 路由 | 页面 | 说明 |
+|------|------|------|
+| `/` | 仪表盘 | 请求量、Token 用量概览 |
+| `/providers` | 模型厂商 | 管理 AI 厂商配置 |
+| `/providers/:id` | 厂商详情 | 编辑厂商端点、模型列表 |
+| `/models` | 模型映射 | 虚拟模型 → 实际模型路由 |
+| `/models/:id` | 映射详情 | 编辑映射规则 |
+| `/keys` | API 密钥 | 管理网关访问密钥 |
+| `/keys/:id` | 密钥详情 | 模型/MCP 权限、用量统计 |
+| `/mcps` | MCP 服务 | MCP 服务管理 |
+| `/mcps/:id` | MCP 详情 | 编辑 MCP 服务配置 |
+| `/model_usage` | 模型用量 | 按模型/密钥/时间的用量图表 |
+| `/mcp_usage` | MCP 用量 | MCP 调用统计 |
+| `/protocol_compare` | 协议对比 | 多协议响应格式对比 |
+| `/debug` | 调试 | API 测试、日志查看、模型测试 |
+| `/settings` | 系统设置 | SMTP 测试邮件、密码重置域名 |
+| `/profile` | 个人设置 | 个人信息、偏好、安全 |
+| `/login` | 登录 | 用户登录 |
+| `/forgot-password` | 忘记密码 | 发送密码重置邮件 |
+| `/reset-password` | 重置密码 | 通过 token 重置密码 |
 
-Docker 镜像已内置 `config.yaml` 的所有默认值，**为零配置运行**（默认 SQLite + 端口 18080 + 管理员 admin/admin）。
+## 技术栈
 
-```bash
-# 最小启动（SQLite，所有默认值）
-docker run -d -p 18080:18080 ghcr.io/aaro-n/ai-gateway:latest
-```
+- **Vue 3** `<script setup>` Composition API
+- **TypeScript** 严格模式
+- **Vite** 构建工具
+- **Element Plus** UI 组件库
+- **Vue Router** 路由管理
+- **Pinia** 状态管理
+- **Axios** HTTP 客户端
+- **Vue I18n** 国际化（中文/英文）
+- **ECharts** 用量图表
+- **@codemirror** 代码编辑器（调试页）
 
-### 生产环境至少需要设置
-
-| 环境变量 | 必填 | 默认值 | 说明 |
-|----------|:----:|--------|------|
-| `AG_DATABASE_TYPE` | ✓ | `sqlite` | `postgres` 或 `sqlite` |
-| `AG_DATABASE_URL` | — | — | PostgreSQL 连接 URL/DSN（推荐，优先级高于字段） |
-| `AG_DATABASE_HOST` | — | — | PostgreSQL 主机地址（`url` 为空时使用） |
-| `AG_DATABASE_PORT` | — | `5432` | PostgreSQL 端口 |
-| `AG_DATABASE_USERNAME` | — | — | PostgreSQL 用户名 |
-| `AG_DATABASE_PASSWORD` | — | — | PostgreSQL 密码 |
-| `AG_DATABASE_DBNAME` | — | — | PostgreSQL 数据库名 |
-| `AG_ADMIN_USERNAME` | 建议 | `admin` | 管理员账号 |
-| `AG_ADMIN_PASSWORD` | 建议 | `admin` | **生产环境务必修改** |
-| `AG_SERVER_SESSION_SECRET` | — | 自动生成 | 会话加密密钥 |
-
-> 所有环境变量见 `.env.example`（项目根目录）和 `docker-compose.yml`。
-
-### docker-compose 一键部署（PostgreSQL）
-
-```bash
-cp .env.example .env
-# 编辑 .env，修改 AG_ADMIN_PASSWORD
-docker compose up -d
-```
-
-### 获取 Docker 镜像
-
-所有镜像推送到 [GitHub Container Registry (GHCR)](https://github.com/aaro-n/AI-Gateway/pkgs/container/ai-gateway)。
+## 开发
 
 ```bash
-# 无需登录，直接拉取（GHCR 公开包）
-docker pull ghcr.io/aaro-n/ai-gateway:test        # 测试版（每次 push 构建，仅 amd64）
-docker pull ghcr.io/aaro-n/ai-gateway:prerelease   # 预发行通用版（amd64 + arm64）
-docker pull ghcr.io/aaro-n/ai-gateway:latest       # 正式发行通用版（amd64 + arm64）
-docker pull ghcr.io/aaro-n/ai-gateway:v0.0.1-rc3   # 指定版本号
+# 安装依赖
+npm install
 
-# 直接运行
-docker run -d -p 18080:18080 ghcr.io/aaro-n/ai-gateway:latest
+# 启动开发服务器（默认 5173，自动代理到后端 18080）
+npm run dev
+
+# 类型检查
+npx vue-tsc -b --noEmit
+
+# 构建（输出到 ../server/res/web/）
+npm run build
 ```
 
-#### 架构支持
+## 构建产物
 
-| 镜像标签 | linux/amd64 | linux/arm64 |
-|----------|:-----------:|:-----------:|
-| `:test` | ✅ | ❌ |
-| `:prerelease` | ✅ | ✅ |
-| `:latest` | ✅ | ✅ |
-| `:v*` | ✅ | ✅ |
+前端构建输出到 `../server/res/web/`，Go 后端通过 `//go:embed` 嵌入二进制。
 
-> Docker 会自动根据你的机器架构拉取匹配的镜像层。
+**必须按顺序构建：**
 
-### 二进制文件（GitHub Release）
+```bash
+# 1. 构建前端（输出到 server/res/web/）
+cd web && make build
 
-每次版本发布（`v*` tag）会自动构建 Windows/Linux 二进制文件并上传到 [Releases 页面](https://github.com/aaro-n/AI-Gateway/releases)。
+# 2. 构建后端（嵌入前端资源）
+cd ../server && go build -o server ./cmd/server/
+```
+
+只运行 `go build` 而不重建前端，二进制内嵌的将是上一次的旧前端。
+
+## 目录结构
+
+```
+web/
+├── public/                 # 静态资源
+├── src/
+│   ├── api/                # Axios 实例 + 拦截器
+│   │   └── index.ts        # 401 处理、错误追踪
+│   ├── assets/             # 图标、图片
+│   ├── components/         # 全局组件
+│   │   ├── CopyButton.vue  # 复制按钮
+│   │   └── layout/         # 布局组件
+│   ├── composables/        # 组合式函数（暗色模式、排序等）
+│   ├── core/               # 核心模块
+│   │   ├── apiErrorTracker.ts
+│   │   └── collapsibleSidebar.ts
+│   ├── locales/            # i18n 翻译文件
+│   │   ├── en.ts
+│   │   └── zh.ts
+│   ├── plugins/            # 插件（i18n 初始化）
+│   ├── router/             # 路由配置
+│   ├── stores/             # Pinia stores
+│   │   ├── user.ts         # 认证、用户信息、SMTP 操作
+│   │   ├── keys.ts         # API 密钥
+│   │   ├── models.ts       # 模型映射
+│   │   ├── providers.ts    # 模型厂商
+│   │   └── mcps.ts         # MCP 服务
+│   ├── styles/             # 全局样式
+│   ├── types/              # TypeScript 类型定义
+│   ├── utils/              # 工具函数（格式化、时区）
+│   └── views/              # 页面组件
+│       ├── Dashboard/
+│       ├── Debug/
+│       ├── Keys/
+│       ├── Login/          # 登录、忘记密码、重置密码
+│       ├── MCPs/
+│       ├── MCPUsage/
+│       ├── ModelUsage/
+│       ├── Models/
+│       ├── Profile/        # 个人设置
+│       ├── ProtocolCompare/
+│       ├── Providers/
+│       └── Settings/       # SMTP 测试邮件、域名配置
+├── index.html
+├── package.json
+├── Makefile
+├── tsconfig.json
+└── vite.config.ts
+```
+
+## 环境变量
+
+开发代理配置在 `vite.config.ts`：
+
+```ts
+server: {
+  proxy: {
+    '/api': 'http://localhost:18080',
+    '/gateway': 'http://localhost:18080',
+    '/mcp': 'http://localhost:18080'
+  }
+}
+```
+

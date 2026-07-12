@@ -8,9 +8,10 @@ import (
 )
 
 // LogEntry 单条日志记录
-// Timestamp 存 RFC3339 UTC 字符串（如 "2026-07-12T09:00:00.000Z"），
+// Timestamp 存 RFC3339 服务器时区字符串（如 "2026-07-12T17:00:00.000+08:00"），
 // 前端按用户时区（User.TimeZone）用 Intl.DateTimeFormat 格式化显示。
-// RFC3339 字符串定长可排序，可直接用字符串比较做增量过滤。
+// 增量过滤通过 time.Time 解析后比较绝对时刻，正确处理夏令时偏移变化。
+// IANA 时区自动处理夏令时；如 America/New_York 在 7 月输出 -04:00，1 月输出 -05:00。
 type LogEntry struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"`
@@ -57,18 +58,28 @@ func GetRingBufferEntries(limit int) []LogEntry {
 	return result
 }
 
-// GetRingBufferEntriesSince 获取指定时间戳之后的新增日志（用于增量轮询）
+// GetRingBufferEntriesSince 获取指定时间戳之后的新增日志（用于增量轮询）。
+// 使用 time.Time 解析后比较绝对时刻，避免夏令时偏移变化时字符串比较错序。
 func GetRingBufferEntriesSince(since string) []LogEntry {
 	ringMu.RLock()
 	defer ringMu.RUnlock()
 	if since == "" {
 		return GetRingBufferEntries(50)
 	}
+	sinceTime, sinceErr := time.Parse(time.RFC3339Nano, since)
 	result := make([]LogEntry, 0)
 	for _, e := range ringEntries {
-		if e.Timestamp > since {
-			result = append(result, e)
+		if sinceErr == nil {
+			if t, err := time.Parse(time.RFC3339Nano, e.Timestamp); err == nil && !t.After(sinceTime) {
+				continue
+			}
+		} else {
+			// since 解析失败时 fallback 到字符串比较
+			if e.Timestamp <= since {
+				continue
+			}
 		}
+		result = append(result, e)
 	}
 	return result
 }
@@ -106,7 +117,7 @@ func appendToRing(r slog.Record) {
 	}
 
 	entry := LogEntry{
-		Timestamp: r.Time.UTC().Format(time.RFC3339Nano),
+		Timestamp: r.Time.Format(time.RFC3339Nano),
 		Level:     r.Level.String(),
 		Message:   r.Message,
 	}
@@ -136,7 +147,7 @@ func PushRingEntry(level, message, traceID string) {
 	}
 
 	entry := LogEntry{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Timestamp: time.Now().Format(time.RFC3339Nano),
 		Level:     level,
 		Message:   message,
 		TraceID:   traceID,

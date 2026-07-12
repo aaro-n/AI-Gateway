@@ -12,6 +12,7 @@ import (
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/schemaclean"
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/core/unified/thinking"
 )
 
 // FromUnified 将 UnifiedRequest 转为 Gemini 请求并发送到上游
@@ -126,6 +127,29 @@ func (p *GeminiProvider) unifiedToGemini(req *unified.Request) map[string]interf
 	}
 	if len(req.Stop) > 0 {
 		genConfig["stopSequences"] = req.Stop
+	}
+	// 思考管道 — 使用 ThkConfig（管道）或回退到原始字段
+	if cfg := req.ThkConfig; cfg != nil {
+		switch cfg.Mode {
+		case thinking.ModeBudget:
+			genConfig["thinkingConfig"] = map[string]interface{}{
+				"thinkingBudget": cfg.Budget,
+			}
+		case thinking.ModeLevel:
+			budget := thinking.LevelToBudget(cfg.Level)
+			if budget <= 0 {
+				budget = 4096
+			}
+			genConfig["thinkingConfig"] = map[string]interface{}{
+				"thinkingBudget": budget,
+			}
+		case thinking.ModeAuto:
+			genConfig["thinkingConfig"] = map[string]interface{}{
+				"thinkingBudget": -1, // Gemini auto mode
+			}
+		case thinking.ModeNone:
+			// no thinking config → Gemini 默认行为
+		}
 	}
 	result["generationConfig"] = genConfig
 

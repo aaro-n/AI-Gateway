@@ -10,24 +10,37 @@ const routes = [
     meta: { requiresAuth: false }
   },
   {
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('@/views/Login/ForgotPassword.vue'),
+    meta: { requiresAuth: false }
+  },
+  {
+    path: '/reset-password',
+    name: 'ResetPassword',
+    component: () => import('@/views/Login/ResetPassword.vue'),
+    meta: { requiresAuth: false }
+  },
+  {
     path: '/',
     component: () => import('@/components/layout/MainLayout.vue'),
     meta: { requiresAuth: true },
     children: [
       { path: '', name: 'Dashboard', component: () => import('@/views/Dashboard/index.vue') },
-      { path: 'providers', name: 'Providers', component: () => import('@/views/Providers/index.vue') },
-      { path: 'providers/:id', name: 'ProviderDetail', component: () => import('@/views/Providers/Detail.vue') },
-      { path: 'models', name: 'Models', component: () => import('@/views/Models/index.vue') },
-      { path: 'models/:id', name: 'ModelDetail', component: () => import('@/views/Models/Detail.vue') },
+      { path: 'providers', name: 'Providers', component: () => import('@/views/Providers/index.vue'), meta: { requiresAdmin: true } },
+      { path: 'providers/:id', name: 'ProviderDetail', component: () => import('@/views/Providers/Detail.vue'), meta: { requiresAdmin: true } },
+      { path: 'models', name: 'Models', component: () => import('@/views/Models/index.vue'), meta: { requiresAdmin: true } },
+      { path: 'models/:id', name: 'ModelDetail', component: () => import('@/views/Models/Detail.vue'), meta: { requiresAdmin: true } },
       { path: 'keys', name: 'Keys', component: () => import('@/views/Keys/index.vue') },
       { path: 'keys/:id', name: 'KeyDetail', component: () => import('@/views/Keys/Detail.vue') },
-      { path: 'mcps', name: 'MCPs', component: () => import('@/views/MCPs/index.vue') },
-      { path: 'mcps/:id', name: 'MCPDetail', component: () => import('@/views/MCPs/Detail.vue') },
+      { path: 'mcps', name: 'MCPs', component: () => import('@/views/MCPs/index.vue'), meta: { requiresAdmin: true } },
+      { path: 'mcps/:id', name: 'MCPDetail', component: () => import('@/views/MCPs/Detail.vue'), meta: { requiresAdmin: true } },
       { path: 'model_usage', name: 'ModelUsage', component: () => import('@/views/ModelUsage/index.vue') },
       { path: 'mcp_usage', name: 'MCPUsage', component: () => import('@/views/MCPUsage/index.vue') },
       { path: 'protocol_compare', name: 'ProtocolCompare', component: () => import('@/views/ProtocolCompare/index.vue') },
       { path: 'debug', name: 'Debug', component: () => import('@/views/Debug/index.vue') },
-      { path: 'settings', name: 'Settings', component: () => import('@/views/Settings/index.vue') }
+      { path: 'settings', name: 'Settings', component: () => import('@/views/Settings/index.vue') },
+      { path: 'profile', name: 'Profile', component: () => import('@/views/Profile/index.vue') }
     ]
   }
 ]
@@ -48,6 +61,8 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.meta.requiresAuth !== false && !userStore.isLoggedIn) {
     next('/login')
+  } else if (to.meta.requiresAdmin && !userStore.isAdmin) {
+    next('/')
   } else if (to.path === '/login' && userStore.isLoggedIn) {
     next('/')
   } else {

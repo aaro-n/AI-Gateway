@@ -15,6 +15,7 @@ import (
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/toolnamesafe"
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/core/unified/thinking"
 )
 
 // =============================================================================
@@ -207,28 +208,53 @@ func (p *AnthropicProvider) unifiedToAnthropic(req *unified.Request) map[string]
 	if len(req.Stop) > 0 {
 		result["stop_sequences"] = req.Stop
 	}
-	// 还原 thinking 配置
-	thinkingType := ""
-	if meta != nil {
-		if t, ok := meta["thinking_type"].(string); ok {
-			thinkingType = t
+	// 还原 thinking 配置 — 优先使用网关注入的 ThkConfig（已通过管道校验/转换）
+	if cfg := req.ThkConfig; cfg != nil {
+		switch cfg.Mode {
+		case thinking.ModeBudget:
+			result["thinking"] = map[string]interface{}{
+				"type":          "enabled",
+				"budget_tokens": cfg.Budget,
+			}
+		case thinking.ModeLevel:
+			// Level → Budget（Anthropic 只支持 budget_tokens）
+			budget := thinking.LevelToBudget(cfg.Level)
+			if budget <= 0 {
+				budget = 4096
+			}
+			result["thinking"] = map[string]interface{}{
+				"type":          "enabled",
+				"budget_tokens": budget,
+			}
+		case thinking.ModeAuto:
+			result["thinking"] = map[string]interface{}{"type": "enabled", "budget_tokens": 4096}
+		case thinking.ModeNone:
+			result["thinking"] = map[string]interface{}{"type": "disabled"}
 		}
-	}
-	if req.ReasoningEffort != "" && thinkingType == "" {
-		thinkingType = req.ReasoningEffort
-	}
-	if thinkingType != "" && thinkingType != "none" {
-		thinking := map[string]interface{}{"type": thinkingType}
-		if req.ReasoningBudget != nil && *req.ReasoningBudget > 0 {
-			thinking["budget_tokens"] = *req.ReasoningBudget
-		} else if meta != nil {
-			if bt, ok := meta["thinking_budget_tokens"].(float64); ok {
-				thinking["budget_tokens"] = int(bt)
-			} else if bt, ok := meta["thinking_budget_tokens"].(int); ok {
-				thinking["budget_tokens"] = bt
+	} else {
+		// 回退：使用原有字段（兼容未经过网关的直调用）
+		thinkingType := ""
+		if meta != nil {
+			if t, ok := meta["thinking_type"].(string); ok {
+				thinkingType = t
 			}
 		}
-		result["thinking"] = thinking
+		if req.ReasoningEffort != "" && thinkingType == "" {
+			thinkingType = req.ReasoningEffort
+		}
+		if thinkingType != "" && thinkingType != "none" {
+			thinking := map[string]interface{}{"type": thinkingType}
+			if req.ReasoningBudget != nil && *req.ReasoningBudget > 0 {
+				thinking["budget_tokens"] = *req.ReasoningBudget
+			} else if meta != nil {
+				if bt, ok := meta["thinking_budget_tokens"].(float64); ok {
+					thinking["budget_tokens"] = int(bt)
+				} else if bt, ok := meta["thinking_budget_tokens"].(int); ok {
+					thinking["budget_tokens"] = bt
+				}
+			}
+			result["thinking"] = thinking
+		}
 	}
 	// 还原 tool_choice（优先 Anthropic 原生格式，兼容 simple string）
 	if len(req.ToolChoice) > 0 {

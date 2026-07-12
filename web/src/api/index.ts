@@ -24,7 +24,8 @@ api.interceptors.response.use(
     if (status === 401) {
       const userStore = useUserStore()
       userStore.user = null
-      if (window.location.pathname !== '/login') {
+      const publicPaths = ['/login', '/forgot-password', '/reset-password']
+      if (!publicPaths.includes(window.location.pathname)) {
         window.location.href = '/login'
       }
     }

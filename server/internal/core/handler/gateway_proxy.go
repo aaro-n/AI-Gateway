@@ -15,6 +15,7 @@ import (
 	coreErrors "ai-gateway/internal/core/errors"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/core/unified"
+	"ai-gateway/internal/core/unified/thinking"
 	"ai-gateway/internal/middleware"
 	"ai-gateway/internal/model"
 	"ai-gateway/internal/monitor"
@@ -191,6 +192,21 @@ func (h *UnifiedGatewayHandler) Handle(c *gin.Context) {
 	prefix := "/gateway/" + protocolName
 	if strings.HasPrefix(originalPath, prefix) {
 		c.Request.URL.Path = strings.TrimPrefix(originalPath, prefix)
+	}
+
+	// 7.5 Thinking 管道：构建 ThkConfig → 查找模型能力 → 校验/转换 → 注入 UnifiedRequest
+	tc := thinking.FromUnified(unifiedReq.ReasoningEffort, unifiedReq.ReasoningBudget)
+	if tc.Mode != thinking.ModeAuto {
+		upstreamModelID := allResults[0].ProviderModel.ModelID
+		cap := thinking.LookupCap(upstreamModelID)
+		validated := thinking.ValidateAndConvert(tc, cap)
+		unifiedReq.ThkConfig = &validated.Config
+		if validated.Advice != "" {
+			coreErrors.TraceDebugKVs(traceID, "thinking_pipeline",
+				"upstream_model", upstreamModelID,
+				"advice", validated.Advice,
+				"clamped", fmt.Sprintf("%v", validated.Clamped))
+		}
 	}
 
 	// 8. Failover 循环：逐一尝试候选项

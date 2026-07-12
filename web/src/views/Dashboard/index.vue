@@ -1,6 +1,6 @@
 <template>
   <div class="dashboard">
-    <el-card class="section-card">
+    <el-card class="section-card" v-if="isAdmin">
       <template #header>
         <div class="section-title">
           <el-icon><Box /></el-icon>
@@ -190,9 +190,12 @@ import { useI18n } from 'vue-i18n'
 import * as echarts from 'echarts'
 import { Box, Cpu, Connection } from '@element-plus/icons-vue'
 import api from '@/api'
+import { useUserStore } from '@/stores/user'
 import { formatLatency, formatTokens } from '@/utils/format'
 
 const { t } = useI18n()
+const userStore = useUserStore()
+const isAdmin = computed(() => userStore.isAdmin)
 const isDark = computed(() => document.documentElement.classList.contains('dark'))
 
 interface AssetStats {

@@ -16,9 +16,23 @@ import './style.css'
 const pinia = createPinia()
 const app = createApp(App)
 
+// 语言优先级：本地存储 > 浏览器语言 > 环境变量 VITE_DEFAULT_LANGUAGE > 'zh'
+function detectLocale(): string {
+  const stored = localStorage.getItem('locale')
+  if (stored) return stored
+
+  const browserLang = navigator.language?.split('-')[0]
+  if (browserLang && ['zh', 'en'].includes(browserLang)) return browserLang
+
+  const envDefault = import.meta.env.VITE_DEFAULT_LANGUAGE
+  if (envDefault && ['zh', 'en'].includes(envDefault)) return envDefault
+
+  return 'zh'
+}
+
 const i18n = createI18n({
   legacy: false,
-  locale: localStorage.getItem('locale') || 'zh',
+  locale: detectLocale(),
   messages
 })
 

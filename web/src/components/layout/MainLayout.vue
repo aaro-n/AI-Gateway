@@ -16,15 +16,15 @@
             <el-icon><Monitor /></el-icon>
             <template #title>{{ t('menu.dashboard') }}</template>
           </el-menu-item>
-          <el-menu-item index="/providers">
+          <el-menu-item index="/providers" v-if="isAdmin">
             <el-icon><Connection /></el-icon>
             <template #title>{{ t('menu.providers') }}</template>
           </el-menu-item>
-          <el-menu-item index="/models">
+          <el-menu-item index="/models" v-if="isAdmin">
             <el-icon><Grid /></el-icon>
             <template #title>{{ t('menu.models') }}</template>
           </el-menu-item>
-          <el-menu-item index="/mcps">
+          <el-menu-item index="/mcps" v-if="isAdmin">
             <el-icon><Platform /></el-icon>
             <template #title>{{ t('menu.mcps') }}</template>
           </el-menu-item>
@@ -48,7 +48,7 @@
             <el-icon><Cpu /></el-icon>
             <template #title>{{ t('menu.debug') }}</template>
           </el-menu-item>
-          <el-menu-item index="/settings">
+          <el-menu-item index="/settings" v-if="isAdmin">
             <el-icon><Tools /></el-icon>
             <template #title>{{ t('menu.settings') }}</template>
           </el-menu-item>
@@ -66,17 +66,6 @@
             </el-icon>
           </div>
           <div class="header-right">
-            <el-dropdown @command="setLocale">
-              <span class="lang-btn">
-                {{ locale === 'zh' ? '中文' : 'EN' }}
-              </span>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="zh">中文</el-dropdown-item>
-                  <el-dropdown-item command="en">English</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
             <el-icon class="theme-btn" @click="toggleTheme">
               <Moon v-if="!isDark" />
               <Sunny v-else />
@@ -88,7 +77,11 @@
               </span>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="logout">{{ t('login.logout') }}</el-dropdown-item>
+                  <el-dropdown-item @click="router.push('/profile')">
+                    <el-icon><Setting /></el-icon>
+                    {{ t('settings.title') }}
+                  </el-dropdown-item>
+                  <el-dropdown-item command="logout" divided>{{ t('login.logout') }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -109,7 +102,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const appStore = useAppStore()
 const userStore = useUserStore()
@@ -117,6 +110,7 @@ const userStore = useUserStore()
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const isDark = computed(() => appStore.isDark)
 const username = computed(() => userStore.username)
+const isAdmin = computed(() => userStore.isAdmin)
 const version = import.meta.env.VITE_APP_VERSION || 'dev'
 
 function toggleSidebar() {
@@ -125,11 +119,6 @@ function toggleSidebar() {
 
 function toggleTheme() {
   appStore.toggleTheme()
-}
-
-function setLocale(lang: string) {
-  locale.value = lang
-  appStore.setLocale(lang)
 }
 
 async function handleUserCommand(command: string) {
@@ -197,11 +186,16 @@ async function handleUserCommand(command: string) {
   gap: 20px;
 }
 
-.lang-btn, .theme-btn, .user-btn {
+.theme-btn, .user-btn {
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 4px;
+  font-size: 14px;
+}
+
+.theme-btn:hover, .user-btn:hover {
+  color: var(--el-color-primary);
 }
 
 .main {

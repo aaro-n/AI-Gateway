@@ -10,7 +10,7 @@
       <el-descriptions :column="2" border>
         <el-descriptions-item :label="t('key.name')">{{ key?.name }}</el-descriptions-item>
         <el-descriptions-item :label="t('common.createdAt')">
-          {{ key?.created_at ? new Date(key.created_at).toLocaleString() : '-' }}
+          {{ formatDateTime(key?.created_at) }}
         </el-descriptions-item>
         <el-descriptions-item :label="t('common.status')">
           <el-tag :type="key?.enabled ? 'success' : 'info'" size="small">
@@ -18,7 +18,7 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item :label="t('key.expiresAt')">
-          {{ key?.expires_at ? new Date(key.expires_at).toLocaleString() : '-' }}
+          {{ formatDateTime(key?.expires_at) }}
         </el-descriptions-item>
         <el-descriptions-item :label="t('key.key')">
           <div style="display: flex; align-items: center; gap: 12px;">
@@ -336,7 +336,7 @@ import { useCopyText } from '@/composables/useCopyText'
 import CopyButton from '@/components/CopyButton.vue'
 import { getProtocolLabel, getProtocolTagType } from "@/protocols"
 import api from '@/api'
-import { formatContextDisplay } from '@/utils/format'
+import { formatDateTime, formatContextDisplay } from '@/utils/format'
 import { getSortConfig, setSortConfig } from '@/utils/tableSort'
 
 const { t } = useI18n()

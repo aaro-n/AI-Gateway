@@ -1,5 +1,22 @@
 <template>
   <div class="login-page">
+    <div class="lang-top-right">
+      <el-dropdown trigger="click" @command="changeLocale">
+        <span class="lang-toggle">
+          🌐 {{ locale === 'zh' ? '中文' : 'English' }}
+        </span>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="zh" :class="{ active: locale === 'zh' }">
+              <span class="lang-flag">🇨🇳</span> 中文 (Chinese)
+            </el-dropdown-item>
+            <el-dropdown-item command="en" :class="{ active: locale === 'en' }">
+              <span class="lang-flag">🇺🇸</span> English
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </div>
     <div class="login-card">
       <h1 class="title">{{ t('login.title') }}</h1>
       <el-form :model="form" :rules="rules" ref="formRef" @submit.prevent="handleLogin">
@@ -33,9 +50,8 @@
           </el-button>
         </el-form-item>
       </el-form>
-      <div class="lang-switch">
-        <el-button text @click="changeLocale('zh')" :class="{ active: locale === 'zh' }">中文</el-button>
-        <el-button text @click="changeLocale('en')" :class="{ active: locale === 'en' }">EN</el-button>
+      <div class="forgot-link">
+        <router-link to="/forgot-password">{{ t('login.forgotPassword') }}</router-link>
       </div>
     </div>
   </div>
@@ -97,6 +113,36 @@ function changeLocale(lang: string) {
   align-items: center;
   justify-content: center;
   background: #f5f5f5;
+  position: relative;
+}
+
+.lang-top-right {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  z-index: 100;
+}
+
+.lang-toggle {
+  cursor: pointer;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.lang-toggle:hover {
+  background-color: var(--el-fill-color-light);
+}
+
+.lang-flag {
+  margin-right: 4px;
+}
+
+.active {
+  color: var(--el-color-primary);
+  font-weight: bold;
 }
 
 .login-card {
@@ -118,15 +164,14 @@ function changeLocale(lang: string) {
   width: 100%;
 }
 
-.lang-switch {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 20px;
+.forgot-link {
+  text-align: center;
+  margin-bottom: 16px;
 }
 
-.lang-switch .active {
+.forgot-link a {
   color: var(--el-color-primary);
-  font-weight: bold;
+  text-decoration: none;
+  font-size: 13px;
 }
 </style>

@@ -13,7 +13,7 @@
           <el-tag :type="service?.type === 'remote' ? 'success' : 'info'">{{ service?.type }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item :label="t('mcp.lastSync')">
-          {{ service?.last_sync_at ? new Date(service.last_sync_at).toLocaleString() : '-' }}
+          {{ formatDateTime(service?.last_sync_at) }}
         </el-descriptions-item>
         <el-descriptions-item :label="t('mcp.status')">
           <el-tag :type="service?.enabled ? 'success' : 'info'" size="small">
@@ -191,6 +191,7 @@ import { ElMessage } from 'element-plus'
 import CopyButton from '@/components/CopyButton.vue'
 import JsonViewer from '@/components/JsonViewer.vue'
 import api from '@/api'
+import { formatDateTime } from '@/utils/format'
 import { getSortConfig, setSortConfig } from '@/utils/tableSort'
 
 const { t } = useI18n()

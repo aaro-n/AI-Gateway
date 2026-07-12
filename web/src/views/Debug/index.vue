@@ -9,8 +9,8 @@
 
       <p class="intro">{{ t('debug.intro') }}</p>
 
-      <!-- ========== 区域1: 测试模型供应商 ========== -->
-      <el-card shadow="never" class="sub-card">
+      <!-- ========== 区域1: 测试模型供应商（仅管理员） ========== -->
+      <el-card shadow="never" class="sub-card" v-if="isAdmin">
         <template #header>
           <div class="sub-header-row">
             <span class="sub-title">{{ t('debug.providerTest') }}</span>
@@ -210,8 +210,8 @@
         </el-collapse-transition>
       </el-card>
 
-      <!-- ========== 区域3: 服务运行日志 ========== -->
-      <el-card shadow="never" class="sub-card">
+      <!-- ========== 区域3: 服务运行日志（仅管理员） ========== -->
+      <el-card shadow="never" class="sub-card" v-if="isAdmin">
         <template #header>
           <div class="sub-header-row">
             <span class="sub-title">🖥️ {{ t('debug.serverLogs') }}</span>
@@ -253,14 +253,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Refresh } from '@element-plus/icons-vue'
+import { useUserStore } from '@/stores/user'
 import api from '@/api'
 import ConversionBadge from './ConversionBadge.vue'
 import { formatLogTime } from '@/utils/format'
 
 const { t } = useI18n()
+const userStore = useUserStore()
+const isAdmin = computed(() => userStore.isAdmin)
 
 // ── 区域1: Provider 测试 ──
 const providerCollapsed = ref(true)
@@ -497,11 +500,13 @@ function onKeyChange(val: number | undefined) {
 async function fetchKeyBoundModels(keyId: number) {
   try {
     const models: string[] = []
-    // 映射模式：虚拟模型名
+    // 映射模式：仅取 key 已绑定的模型名
     const mappingRes = await api.get(`/keys/${keyId}/models`).catch(() => null)
     if (mappingRes?.data?.models) {
       for (const m of mappingRes.data.models) {
-        models.push(m.name || m.model_name || m.model_id || '')
+        if (m.selected) {
+          models.push(m.name || m.model_name || m.model_id || '')
+        }
       }
     }
     // 直通模式：provider model IDs

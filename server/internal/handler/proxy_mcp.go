@@ -3,23 +3,26 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/model"
-	"ai-gateway/internal/utils"
 )
 
+// MCPProxyHandler 处理 MCP JSON-RPC 请求的代理处理器。
+// 支持 Tools、Resources、Prompts 三种 MCP 资源的权限控制和转发。
 type MCPProxyHandler struct{}
 
 func NewMCPProxyHandler() *MCPProxyHandler {
 	return &MCPProxyHandler{}
 }
+
+// =============================================================================
+// 权限检查
+// =============================================================================
 
 func (h *MCPProxyHandler) hasFullToolAccess(keyID uint) bool {
 	var count int64
@@ -38,6 +41,10 @@ func (h *MCPProxyHandler) hasFullPromptAccess(keyID uint) bool {
 	model.DB.Model(&model.KeyMCPPrompt{}).Where("key_id = ?", keyID).Count(&count)
 	return count == 0
 }
+
+// =============================================================================
+// 请求路由
+// =============================================================================
 
 func (h *MCPProxyHandler) Handle(c *gin.Context) {
 	switch c.Request.Method {
@@ -217,6 +224,10 @@ func (h *MCPProxyHandler) handleDelete(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
+// =============================================================================
+// SSE / HTTP 辅助方法
+// =============================================================================
+
 func (h *MCPProxyHandler) parseAcceptHeader(accept string) (hasJSON, hasSSE bool) {
 	if accept == "" {
 		return true, false
@@ -325,6 +336,10 @@ func (h *MCPProxyHandler) routeMethod(c *gin.Context, req *mcp.JSONRPCRequest) *
 	}
 }
 
+// =============================================================================
+// initialize / ping
+// =============================================================================
+
 func (h *MCPProxyHandler) handleInitialize(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
 	apiKey := c.MustGet("api_key").(*model.Key)
 
@@ -428,436 +443,6 @@ func (h *MCPProxyHandler) handleInitialize(c *gin.Context, req *mcp.JSONRPCReque
 		},
 		ID: req.ID,
 	}
-}
-
-func (h *MCPProxyHandler) handleToolsList(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-
-	var tools []interface{}
-
-	if h.hasFullToolAccess(apiKey.ID) {
-		var allTools []model.MCPTool
-		model.DB.Preload("MCP").Where("enabled = ?", true).Find(&allTools)
-		for _, t := range allTools {
-			if t.MCP != nil && t.MCP.Enabled {
-				tools = append(tools, map[string]interface{}{
-					"name":        t.MCP.Name + "." + t.Name,
-					"description": t.Description,
-					"inputSchema": json.RawMessage(t.InputSchema),
-				})
-			}
-		}
-	} else {
-		var keyTools []model.KeyMCPTool
-		model.DB.Preload("Tool.MCP").Where("key_id = ?", apiKey.ID).Find(&keyTools)
-		for _, kt := range keyTools {
-			if kt.Tool != nil && kt.Tool.MCP != nil && kt.Tool.Enabled && kt.Tool.MCP.Enabled {
-				tools = append(tools, map[string]interface{}{
-					"name":        kt.Tool.MCP.Name + "." + kt.Tool.Name,
-					"description": kt.Tool.Description,
-					"inputSchema": json.RawMessage(kt.Tool.InputSchema),
-				})
-			}
-		}
-	}
-
-	return mcp.NewResponse(req.ID, map[string]interface{}{
-		"tools": tools,
-	})
-}
-
-func (h *MCPProxyHandler) handleToolsCall(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-	startTime := time.Now()
-	clientIPs := utils.GetClientIPInfo(c)
-
-	var params struct {
-		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments"`
-	}
-
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return mcp.NewErrorResponse(req.ID, mcp.ErrInvalidParams)
-	}
-
-	parts := strings.SplitN(params.Name, ".", 2)
-	if len(parts) != 2 {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: "invalid tool name format, expected: mcp_name.tool_name",
-		})
-	}
-
-	mcpName := parts[0]
-	toolName := parts[1]
-
-	var m model.MCP
-	if err := model.DB.Where("name = ? AND enabled = ?", mcpName, true).First(&m).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("MCP not found: %s", mcpName),
-		})
-	}
-
-	var tool model.MCPTool
-	if err := model.DB.Where("mcp_id = ? AND name = ? AND enabled = ?", m.ID, toolName, true).First(&tool).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("tool not found: %s", params.Name),
-		})
-	}
-
-	if !h.hasFullToolAccess(apiKey.ID) {
-		var keyTool model.KeyMCPTool
-		if err := model.DB.Where("key_id = ? AND tool_id = ?", apiKey.ID, tool.ID).First(&keyTool).Error; err != nil {
-			return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-				Code:    mcp.ErrInvalidParams.Code,
-				Message: "permission denied",
-			})
-		}
-	}
-
-	resp, err := mcpManager.CallTool(&m, toolName, params.Arguments)
-	latencyMs := int(time.Since(startTime).Milliseconds())
-
-	status := "success"
-	errorMsg := ""
-	inputSize := 0
-	outputSize := 0
-
-	if err != nil {
-		status = "error"
-		errorMsg = err.Error()
-	} else {
-		status = "success"
-		if resp != nil {
-			respBytes, _ := json.Marshal(resp)
-			outputSize = len(respBytes)
-		}
-	}
-
-	argsBytes, _ := json.Marshal(params.Arguments)
-	inputSize = len(argsBytes)
-
-	mcpLog := NewMCPLog(
-		"default",
-		clientIPs,
-		apiKey.ID,
-		apiKey.Name,
-		m.ID,
-		m.Name,
-		m.Type,
-		"tool",
-		toolName,
-		"call",
-		inputSize,
-		outputSize,
-		latencyMs,
-		status,
-		errorMsg,
-	)
-	model.DB.Create(&mcpLog)
-	log.Println(mcpLog.String())
-
-	if err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInternalError.Code,
-			Message: err.Error(),
-		})
-	}
-
-	resp.ID = req.ID
-	return resp
-}
-
-func (h *MCPProxyHandler) handleResourcesList(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-
-	var resources []interface{}
-
-	if h.hasFullResourceAccess(apiKey.ID) {
-		var allResources []model.MCPResource
-		model.DB.Preload("MCP").Where("enabled = ?", true).Find(&allResources)
-		for _, r := range allResources {
-			if r.MCP != nil && r.MCP.Enabled {
-				resources = append(resources, map[string]interface{}{
-					"uri":         "mcp://" + r.MCP.Name + "/" + r.URI,
-					"name":        r.Name,
-					"description": r.Description,
-					"mimeType":    r.MimeType,
-				})
-			}
-		}
-	} else {
-		var keyResources []model.KeyMCPResource
-		model.DB.Preload("Resource.MCP").Where("key_id = ?", apiKey.ID).Find(&keyResources)
-		for _, kr := range keyResources {
-			if kr.Resource != nil && kr.Resource.MCP != nil && kr.Resource.Enabled && kr.Resource.MCP.Enabled {
-				resources = append(resources, map[string]interface{}{
-					"uri":         "mcp://" + kr.Resource.MCP.Name + "/" + kr.Resource.URI,
-					"name":        kr.Resource.Name,
-					"description": kr.Resource.Description,
-					"mimeType":    kr.Resource.MimeType,
-				})
-			}
-		}
-	}
-
-	return mcp.NewResponse(req.ID, map[string]interface{}{
-		"resources": resources,
-	})
-}
-
-func (h *MCPProxyHandler) handleResourcesRead(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-	startTime := time.Now()
-	clientIPs := utils.GetClientIPInfo(c)
-
-	var params struct {
-		URI string `json:"uri"`
-	}
-
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return mcp.NewErrorResponse(req.ID, mcp.ErrInvalidParams)
-	}
-
-	if !strings.HasPrefix(params.URI, "mcp://") {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: "invalid resource URI format, expected: mcp://mcp_name/original_uri",
-		})
-	}
-
-	uriWithoutPrefix := strings.TrimPrefix(params.URI, "mcp://")
-	parts := strings.SplitN(uriWithoutPrefix, "/", 2)
-	if len(parts) != 2 {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: "invalid resource URI format, expected: mcp://mcp_name/original_uri",
-		})
-	}
-
-	mcpName := parts[0]
-	originalURI := parts[1]
-
-	var m model.MCP
-	if err := model.DB.Where("name = ? AND enabled = ?", mcpName, true).First(&m).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("MCP not found: %s", mcpName),
-		})
-	}
-
-	var resource model.MCPResource
-	if err := model.DB.Where("mcp_id = ? AND uri = ? AND enabled = ?", m.ID, originalURI, true).First(&resource).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("resource not found: %s", params.URI),
-		})
-	}
-
-	if !h.hasFullResourceAccess(apiKey.ID) {
-		var keyResource model.KeyMCPResource
-		if err := model.DB.Where("key_id = ? AND resource_id = ?", apiKey.ID, resource.ID).First(&keyResource).Error; err != nil {
-			return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-				Code:    mcp.ErrInvalidParams.Code,
-				Message: "permission denied",
-			})
-		}
-	}
-
-	resp, err := mcpManager.ReadResource(&m, originalURI)
-	latencyMs := int(time.Since(startTime).Milliseconds())
-
-	status := "success"
-	errorMsg := ""
-	inputSize := 0
-	outputSize := 0
-
-	if err != nil {
-		status = "error"
-		errorMsg = err.Error()
-	} else {
-		status = "success"
-		if resp != nil {
-			respBytes, _ := json.Marshal(resp)
-			outputSize = len(respBytes)
-		}
-	}
-
-	mcpLog := NewMCPLog(
-		"default",
-		clientIPs,
-		apiKey.ID,
-		apiKey.Name,
-		m.ID,
-		m.Name,
-		m.Type,
-		"resource",
-		originalURI,
-		"read",
-		inputSize,
-		outputSize,
-		latencyMs,
-		status,
-		errorMsg,
-	)
-	model.DB.Create(&mcpLog)
-	log.Println(mcpLog.String())
-
-	if err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInternalError.Code,
-			Message: err.Error(),
-		})
-	}
-
-	resp.ID = req.ID
-	return resp
-}
-
-func (h *MCPProxyHandler) handleResourcesSubscribe(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	return mcp.NewErrorResponse(req.ID, mcp.ErrMethodNotFound)
-}
-
-func (h *MCPProxyHandler) handlePromptsList(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-
-	var prompts []interface{}
-
-	if h.hasFullPromptAccess(apiKey.ID) {
-		var allPrompts []model.MCPPrompt
-		model.DB.Preload("MCP").Where("enabled = ?", true).Find(&allPrompts)
-		for _, p := range allPrompts {
-			if p.MCP != nil && p.MCP.Enabled {
-				prompts = append(prompts, map[string]interface{}{
-					"name":        p.MCP.Name + "." + p.Name,
-					"description": p.Description,
-					"arguments":   json.RawMessage(p.Arguments),
-				})
-			}
-		}
-	} else {
-		var keyPrompts []model.KeyMCPPrompt
-		model.DB.Preload("Prompt.MCP").Where("key_id = ?", apiKey.ID).Find(&keyPrompts)
-		for _, kp := range keyPrompts {
-			if kp.Prompt != nil && kp.Prompt.MCP != nil && kp.Prompt.Enabled && kp.Prompt.MCP.Enabled {
-				prompts = append(prompts, map[string]interface{}{
-					"name":        kp.Prompt.MCP.Name + "." + kp.Prompt.Name,
-					"description": kp.Prompt.Description,
-					"arguments":   json.RawMessage(kp.Prompt.Arguments),
-				})
-			}
-		}
-	}
-
-	return mcp.NewResponse(req.ID, map[string]interface{}{
-		"prompts": prompts,
-	})
-}
-
-func (h *MCPProxyHandler) handlePromptsGet(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {
-	apiKey := c.MustGet("api_key").(*model.Key)
-	startTime := time.Now()
-	clientIPs := utils.GetClientIPInfo(c)
-
-	var params struct {
-		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments"`
-	}
-
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return mcp.NewErrorResponse(req.ID, mcp.ErrInvalidParams)
-	}
-
-	parts := strings.SplitN(params.Name, ".", 2)
-	if len(parts) != 2 {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: "invalid prompt name format, expected: mcp_name.prompt_name",
-		})
-	}
-
-	mcpName := parts[0]
-	promptName := parts[1]
-
-	var m model.MCP
-	if err := model.DB.Where("name = ? AND enabled = ?", mcpName, true).First(&m).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("MCP not found: %s", mcpName),
-		})
-	}
-
-	var prompt model.MCPPrompt
-	if err := model.DB.Where("mcp_id = ? AND name = ? AND enabled = ?", m.ID, promptName, true).First(&prompt).Error; err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInvalidParams.Code,
-			Message: fmt.Sprintf("prompt not found: %s", params.Name),
-		})
-	}
-
-	if !h.hasFullPromptAccess(apiKey.ID) {
-		var keyPrompt model.KeyMCPPrompt
-		if err := model.DB.Where("key_id = ? AND prompt_id = ?", apiKey.ID, prompt.ID).First(&keyPrompt).Error; err != nil {
-			return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-				Code:    mcp.ErrInvalidParams.Code,
-				Message: "permission denied",
-			})
-		}
-	}
-
-	resp, err := mcpManager.GetPrompt(&m, promptName, params.Arguments)
-	latencyMs := int(time.Since(startTime).Milliseconds())
-
-	status := "success"
-	errorMsg := ""
-	inputSize := 0
-	outputSize := 0
-
-	if err != nil {
-		status = "error"
-		errorMsg = err.Error()
-	} else {
-		status = "success"
-		if resp != nil {
-			respBytes, _ := json.Marshal(resp)
-			outputSize = len(respBytes)
-		}
-	}
-
-	argsBytes, _ := json.Marshal(params.Arguments)
-	inputSize = len(argsBytes)
-
-	mcpLog := NewMCPLog(
-		"default",
-		clientIPs,
-		apiKey.ID,
-		apiKey.Name,
-		m.ID,
-		m.Name,
-		m.Type,
-		"prompt",
-		promptName,
-		"get",
-		inputSize,
-		outputSize,
-		latencyMs,
-		status,
-		errorMsg,
-	)
-	model.DB.Create(&mcpLog)
-	log.Println(mcpLog.String())
-
-	if err != nil {
-		return mcp.NewErrorResponse(req.ID, &mcp.RPCError{
-			Code:    mcp.ErrInternalError.Code,
-			Message: err.Error(),
-		})
-	}
-
-	resp.ID = req.ID
-	return resp
 }
 
 func (h *MCPProxyHandler) handlePing(c *gin.Context, req *mcp.JSONRPCRequest) *mcp.JSONRPCResponse {

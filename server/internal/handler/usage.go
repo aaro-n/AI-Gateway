@@ -52,73 +52,160 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 	nDaysAgo := now.AddDate(0, 0, -nDays).Format("2006-01-02")
 	lastNDays := generateLastNDaysIn(nDays+1, userLoc)
 
-	// 资产统计
-	var totalProviders int64
-	model.DB.Model(&model.Provider{}).Count(&totalProviders)
+	uid := GetCurrentUserID(c)
+	isAdmin := IsAdmin(c)
 
-	var activeProviders int64
-	model.DB.Model(&model.Provider{}).Where("enabled = ?", true).Count(&activeProviders)
+	// 非管理员：获取当前用户的 key ID 列表，用于过滤日志
+	var userKeyIDs []uint
+	if !isAdmin {
+		var keys []model.Key
+		model.DB.Where("user_id = ?", uid).Select("id").Find(&keys)
+		for _, k := range keys {
+			userKeyIDs = append(userKeyIDs, k.ID)
+		}
+	}
 
-	var totalModels int64
-	model.DB.Model(&model.Model{}).Count(&totalModels)
+	// 资产统计 — 非管理员仅统计自己有权限的资源
+	var totalProviders, activeProviders int64
+	var totalModels, activeModels int64
+	var totalProviderModels, activeProviderModels int64
+	var totalMCPs, activeMCPs int64
+	var totalKeys, activeKeys int64
+	var totalMCPTools, totalMCPResources, totalMCPPrompts int64
+	var activeMCPTools, activeMCPResources, activeMCPPrompts int64
 
-	var activeModels int64
-	model.DB.Model(&model.Model{}).Where("enabled = ?", true).Count(&activeModels)
+	if isAdmin {
+		model.DB.Model(&model.Provider{}).Count(&totalProviders)
+		model.DB.Model(&model.Provider{}).Where("enabled = ?", true).Count(&activeProviders)
+		model.DB.Model(&model.Model{}).Count(&totalModels)
+		model.DB.Model(&model.Model{}).Where("enabled = ?", true).Count(&activeModels)
+		model.DB.Model(&model.ProviderModel{}).Count(&totalProviderModels)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT pm.id)
+			FROM provider_models pm
+			JOIN providers p ON pm.provider_id = p.id
+			WHERE pm.is_available = ? AND p.enabled = ?
+				AND p.deleted_at IS NULL
+		`, true, true).Scan(&activeProviderModels)
+		model.DB.Model(&model.MCP{}).Count(&totalMCPs)
+		model.DB.Model(&model.MCP{}).Where("enabled = ?", true).Count(&activeMCPs)
+		model.DB.Model(&model.Key{}).Count(&totalKeys)
+		model.DB.Model(&model.Key{}).Where("enabled = ?", true).Count(&activeKeys)
+		model.DB.Model(&model.MCPTool{}).Count(&totalMCPTools)
+		model.DB.Model(&model.MCPResource{}).Count(&totalMCPResources)
+		model.DB.Model(&model.MCPPrompt{}).Count(&totalMCPPrompts)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mt.id)
+			FROM mcp_tools mt
+			JOIN mcps m ON mt.mcp_id = m.id
+			WHERE mt.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPTools)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mr.id)
+			FROM mcp_resources mr
+			JOIN mcps m ON mr.mcp_id = m.id
+			WHERE mr.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPResources)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mp.id)
+			FROM mcp_prompts mp
+			JOIN mcps m ON mp.mcp_id = m.id
+			WHERE mp.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPPrompts)
+	} else {
+		// 非管理员：统计其有权限的厂商
+		model.DB.Model(&model.Provider{}).
+			Joins("JOIN user_providers up ON up.provider_id = providers.id AND up.user_id = ?", uid).
+			Count(&totalProviders)
+		model.DB.Model(&model.Provider{}).
+			Joins("JOIN user_providers up ON up.provider_id = providers.id AND up.user_id = ?", uid).
+			Where("providers.enabled = ?", true).
+			Count(&activeProviders)
+		// 统计其有权限的模型映射
+		model.DB.Model(&model.Model{}).
+			Joins("JOIN user_models um ON um.model_id = models.id AND um.user_id = ?", uid).
+			Count(&totalModels)
+		model.DB.Model(&model.Model{}).
+			Joins("JOIN user_models um ON um.model_id = models.id AND um.user_id = ?", uid).
+			Where("models.enabled = ?", true).
+			Count(&activeModels)
+		// 非管理员的厂商模型数沿用权限厂商下的模型数
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT pm.id)
+			FROM provider_models pm
+			JOIN providers p ON pm.provider_id = p.id
+			JOIN user_providers up ON up.provider_id = p.id AND up.user_id = ?
+			WHERE p.enabled = ? AND p.deleted_at IS NULL
+		`, uid, true).Scan(&totalProviderModels)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT pm.id)
+			FROM provider_models pm
+			JOIN providers p ON pm.provider_id = p.id
+			JOIN user_providers up ON up.provider_id = p.id AND up.user_id = ?
+			WHERE pm.is_available = ? AND p.enabled = ? AND p.deleted_at IS NULL
+		`, uid, true, true).Scan(&activeProviderModels)
+		// MCP 暂不按用户过滤
+		model.DB.Model(&model.MCP{}).Count(&totalMCPs)
+		model.DB.Model(&model.MCP{}).Where("enabled = ?", true).Count(&activeMCPs)
+		// 只统计当前用户的 Key
+		model.DB.Model(&model.Key{}).Where("user_id = ?", uid).Count(&totalKeys)
+		model.DB.Model(&model.Key{}).Where("user_id = ? AND enabled = ?", uid, true).Count(&activeKeys)
+		model.DB.Model(&model.MCPTool{}).Count(&totalMCPTools)
+		model.DB.Model(&model.MCPResource{}).Count(&totalMCPResources)
+		model.DB.Model(&model.MCPPrompt{}).Count(&totalMCPPrompts)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mt.id)
+			FROM mcp_tools mt
+			JOIN mcps m ON mt.mcp_id = m.id
+			WHERE mt.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPTools)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mr.id)
+			FROM mcp_resources mr
+			JOIN mcps m ON mr.mcp_id = m.id
+			WHERE mr.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPResources)
+		model.DB.Raw(`
+			SELECT COUNT(DISTINCT mp.id)
+			FROM mcp_prompts mp
+			JOIN mcps m ON mp.mcp_id = m.id
+			WHERE mp.enabled = ? AND m.enabled = ?
+				AND m.deleted_at IS NULL
+		`, true, true).Scan(&activeMCPPrompts)
+	}
 
-	var totalProviderModels int64
-	model.DB.Model(&model.ProviderModel{}).Count(&totalProviderModels)
+	// Model API 统计 (过去N天) — 非管理员仅统计自己的 Key 产生的日志
+	modelLogQuery := model.DB.Model(&model.ModelLog{}).Where("created_at >= ?", nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		modelLogQuery = modelLogQuery.Where("key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		// 用户没有 key，直接返回零值
+		modelLogQuery = modelLogQuery.Where("1 = 0")
+	}
 
-	var activeProviderModels int64
-	model.DB.Raw(`
-		SELECT COUNT(DISTINCT pm.id)
-		FROM provider_models pm
-		JOIN providers p ON pm.provider_id = p.id
-		WHERE pm.is_available = ? AND p.enabled = ?
-			AND p.deleted_at IS NULL
-	`, true, true).Scan(&activeProviderModels)
-
-	var totalMCPs int64
-	model.DB.Model(&model.MCP{}).Count(&totalMCPs)
-
-	var activeMCPs int64
-	model.DB.Model(&model.MCP{}).Where("enabled = ?", true).Count(&activeMCPs)
-
-	var totalKeys int64
-	model.DB.Model(&model.Key{}).Count(&totalKeys)
-
-	var activeKeys int64
-	model.DB.Model(&model.Key{}).Where("enabled = ?", true).Count(&activeKeys)
-
-	// Model API 统计 (过去N天)
 	var modelTotalRequests int64
-	model.DB.Model(&model.ModelLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Count(&modelTotalRequests)
+	modelLogQuery.Count(&modelTotalRequests)
 
 	var modelSuccessCount int64
-	model.DB.Model(&model.ModelLog{}).
-		Where("created_at >= ? AND status = ?", nDaysAgo, "success").
-		Count(&modelSuccessCount)
+	modelLogQuery.Where("status = ?", "success").Count(&modelSuccessCount)
 
 	var modelTotalTokens int64
-	model.DB.Model(&model.ModelLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Select("COALESCE(SUM(total_tokens), 0)").Scan(&modelTotalTokens)
+	modelLogQuery.Select("COALESCE(SUM(total_tokens), 0)").Scan(&modelTotalTokens)
 
 	var modelAvgLatency float64
-	model.DB.Model(&model.ModelLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Select("COALESCE(AVG(latency_ms), 0)").Scan(&modelAvgLatency)
+	modelLogQuery.Select("COALESCE(AVG(latency_ms), 0)").Scan(&modelAvgLatency)
 
 	// 按本地时区在 Go 端分组，避免 SQLite/PostgreSQL DATE() 时区行为差异
 	var modelDailyRows []struct {
 		CreatedAt time.Time
 		Status    string
 	}
-	model.DB.Model(&model.ModelLog{}).
-		Select("created_at, status").
-		Where("created_at >= ?", nDaysAgo).
-		Scan(&modelDailyRows)
+	modelLogQuery.Select("created_at, status").Scan(&modelDailyRows)
 	modelDailyStats := groupByDate(lastNDays, modelDailyRows,
 		func(r struct {
 			CreatedAt time.Time
@@ -141,10 +228,7 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		CreatedAt   time.Time
 		TotalTokens int64
 	}
-	model.DB.Model(&model.ModelLog{}).
-		Select("created_at, total_tokens").
-		Where("created_at >= ?", nDaysAgo).
-		Scan(&modelTokenRows)
+	modelLogQuery.Select("created_at, total_tokens").Scan(&modelTokenRows)
 	modelTokenDailyStats := groupByDate(lastNDays, modelTokenRows,
 		func(r struct {
 			CreatedAt   time.Time
@@ -166,7 +250,7 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		Tokens     int64   `json:"tokens"`
 		AvgLatency float64 `json:"avg_latency"`
 	}
-	model.DB.Raw(`
+	provSQL := model.DB.Raw(`
 		SELECT 
 			p.name as provider, 
 			COUNT(*) as count,
@@ -175,85 +259,56 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		FROM model_logs ml
 		JOIN providers p ON ml.provider_id = p.id
 		WHERE ml.created_at >= ?
-		GROUP BY p.name
-		ORDER BY count DESC
-	`, nDaysAgo).Scan(&providerStats)
+	`, nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		provSQL = provSQL.Where("ml.key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		provSQL = provSQL.Where("1 = 0")
+	}
+	provSQL.Group("p.name").Order("count DESC").Scan(&providerStats)
 
 	var modelStats []struct {
 		Model string `json:"model"`
 		Count int64  `json:"count"`
 	}
-	model.DB.Raw(`
+	modelSQL := model.DB.Raw(`
 		SELECT model, COUNT(*) as count
 		FROM model_logs
 		WHERE created_at >= ?
-		GROUP BY model
-		ORDER BY count DESC
-		LIMIT 10
-	`, nDaysAgo).Scan(&modelStats)
+	`, nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		modelSQL = modelSQL.Where("key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		modelSQL = modelSQL.Where("1 = 0")
+	}
+	modelSQL.Group("model").Order("count DESC").Limit(10).Scan(&modelStats)
 
-	// MCP 资产统计
-	var totalMCPTools int64
-	var totalMCPResources int64
-	var totalMCPPrompts int64
-	var activeMCPTools int64
-	var activeMCPResources int64
-	var activeMCPPrompts int64
-	model.DB.Model(&model.MCPTool{}).Count(&totalMCPTools)
-	model.DB.Model(&model.MCPResource{}).Count(&totalMCPResources)
-	model.DB.Model(&model.MCPPrompt{}).Count(&totalMCPPrompts)
-	model.DB.Raw(`
-		SELECT COUNT(DISTINCT mt.id)
-		FROM mcp_tools mt
-		JOIN mcps m ON mt.mcp_id = m.id
-		WHERE mt.enabled = ? AND m.enabled = ?
-			AND m.deleted_at IS NULL
-	`, true, true).Scan(&activeMCPTools)
-	model.DB.Raw(`
-		SELECT COUNT(DISTINCT mr.id)
-		FROM mcp_resources mr
-		JOIN mcps m ON mr.mcp_id = m.id
-		WHERE mr.enabled = ? AND m.enabled = ?
-			AND m.deleted_at IS NULL
-	`, true, true).Scan(&activeMCPResources)
-	model.DB.Raw(`
-		SELECT COUNT(DISTINCT mp.id)
-		FROM mcp_prompts mp
-		JOIN mcps m ON mp.mcp_id = m.id
-		WHERE mp.enabled = ? AND m.enabled = ?
-			AND m.deleted_at IS NULL
-	`, true, true).Scan(&activeMCPPrompts)
+	// MCP 服务统计 (过去7天) — 非管理员仅统计自己的 Key 产生的日志
+	mcpLogQuery := model.DB.Model(&model.MCPLog{}).Where("created_at >= ?", nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		mcpLogQuery = mcpLogQuery.Where("key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		mcpLogQuery = mcpLogQuery.Where("1 = 0")
+	}
 
-	// MCP 服务统计 (过去7天)
 	var mcpTotalRequests int64
-	model.DB.Model(&model.MCPLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Count(&mcpTotalRequests)
+	mcpLogQuery.Count(&mcpTotalRequests)
 
 	var mcpSuccessCount int64
-	model.DB.Model(&model.MCPLog{}).
-		Where("created_at >= ? AND status = ?", nDaysAgo, "success").
-		Count(&mcpSuccessCount)
+	mcpLogQuery.Where("status = ?", "success").Count(&mcpSuccessCount)
 
 	var mcpTotalSize int64
-	model.DB.Model(&model.MCPLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Select("COALESCE(SUM(input_size + output_size), 0)").Scan(&mcpTotalSize)
+	mcpLogQuery.Select("COALESCE(SUM(input_size + output_size), 0)").Scan(&mcpTotalSize)
 
 	var mcpAvgLatency float64
-	model.DB.Model(&model.MCPLog{}).
-		Where("created_at >= ?", nDaysAgo).
-		Select("COALESCE(AVG(latency_ms), 0)").Scan(&mcpAvgLatency)
+	mcpLogQuery.Select("COALESCE(AVG(latency_ms), 0)").Scan(&mcpAvgLatency)
 
-	// 按本地时区在 Go 端分组，避免 SQLite/PostgreSQL DATE() 时区行为差异
+	// 按本地时区在 Go 端分组
 	var mcpDailyRows []struct {
 		CreatedAt time.Time
 		Status    string
 	}
-	model.DB.Model(&model.MCPLog{}).
-		Select("created_at, status").
-		Where("created_at >= ?", nDaysAgo).
-		Scan(&mcpDailyRows)
+	mcpLogQuery.Select("created_at, status").Scan(&mcpDailyRows)
 	mcpDailyStats := groupByDate(lastNDays, mcpDailyRows,
 		func(r struct {
 			CreatedAt time.Time
@@ -276,26 +331,33 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		MCPType string `json:"mcp_type"`
 		Count   int64  `json:"count"`
 	}
-	model.DB.Raw(`
+	mcpTypeSQL := model.DB.Raw(`
 		SELECT mcp_type, COUNT(*) as count
 		FROM mcp_logs
 		WHERE created_at >= ?
-		GROUP BY mcp_type
-		ORDER BY count DESC
-	`, nDaysAgo).Scan(&mcpTypeStats)
+	`, nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		mcpTypeSQL = mcpTypeSQL.Where("key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		mcpTypeSQL = mcpTypeSQL.Where("1 = 0")
+	}
+	mcpTypeSQL.Group("mcp_type").Order("count DESC").Scan(&mcpTypeStats)
 
 	var mcpServiceStats []struct {
 		MCPName string `json:"mcp_name"`
 		Count   int64  `json:"count"`
 	}
-	model.DB.Raw(`
+	mcpSvcSQL := model.DB.Raw(`
 		SELECT mcp_name, COUNT(*) as count
 		FROM mcp_logs
 		WHERE created_at >= ?
-		GROUP BY mcp_name
-		ORDER BY count DESC
-		LIMIT 10
-	`, nDaysAgo).Scan(&mcpServiceStats)
+	`, nDaysAgo)
+	if !isAdmin && len(userKeyIDs) > 0 {
+		mcpSvcSQL = mcpSvcSQL.Where("key_id IN ?", userKeyIDs)
+	} else if !isAdmin && len(userKeyIDs) == 0 {
+		mcpSvcSQL = mcpSvcSQL.Where("1 = 0")
+	}
+	mcpSvcSQL.Group("mcp_name").Order("count DESC").Limit(10).Scan(&mcpServiceStats)
 
 	c.JSON(http.StatusOK, gin.H{
 		"days": nDays,

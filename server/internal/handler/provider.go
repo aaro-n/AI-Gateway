@@ -122,7 +122,24 @@ func findStoredAPIKey(openaiURL, anthropicURL, geminiURL, deepseekURL, openroute
 
 func (h *ProviderHandler) List(c *gin.Context) {
 	var providers []model.Provider
-	if err := model.DB.Preload("Models").Order("name ASC").Find(&providers).Error; err != nil {
+	query := model.DB.Preload("Models").Order("name ASC")
+
+	// 非 admin 用户只能看到已授权的厂商
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		providerIDs, err := GetUserProviderIDs(uid)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if len(providerIDs) == 0 {
+			c.JSON(http.StatusOK, gin.H{"providers": []providerResponse{}})
+			return
+		}
+		query = query.Where("id IN ?", providerIDs)
+	}
+
+	if err := query.Find(&providers).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

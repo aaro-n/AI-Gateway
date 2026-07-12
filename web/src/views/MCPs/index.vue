@@ -45,7 +45,7 @@
         </el-table-column>
         <el-table-column prop="last_sync_at" :label="t('mcp.lastSync')" width="180" sortable :sort-method="(a: any, b: any) => sortByDate(a, b, 'last_sync_at')">
           <template #default="{ row }">
-            {{ row.last_sync_at ? new Date(row.last_sync_at).toLocaleString() : '-' }}
+            {{ formatDateTime(row.last_sync_at) }}
           </template>
         </el-table-column>
         <el-table-column :label="t('common.action')" width="180">
@@ -97,6 +97,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import CopyButton from '@/components/CopyButton.vue'
 import api from '@/api'
+import { formatDateTime } from '@/utils/format'
 import { getSortConfig, setSortConfig, sortByDate } from '@/utils/tableSort'
 
 const { t } = useI18n()

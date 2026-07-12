@@ -15,6 +15,8 @@ package unified
 import (
 	"context"
 	"encoding/json"
+
+	"ai-gateway/internal/core/unified/thinking"
 )
 
 // =============================================================================
@@ -42,6 +44,10 @@ type Request struct {
 	ReasoningEffort  string          `json:"reasoning_effort,omitempty"` // o1/Claude/DeepSeek 推理深度
 	ReasoningBudget  *int            `json:"reasoning_budget,omitempty"` // Claude thinking budget_tokens
 	Modalities       []string        `json:"modalities,omitempty"`       // 输出模态 ["text","audio","image"] — OpenAI
+
+	// ThkConfig 思考管道配置（由网关在路由后注入，FromUnified 消费）。
+	// 优先于 ReasoningEffort / ReasoningBudget，表示已通过校验和转换的最终配置。
+	ThkConfig *thinking.ThinkingConfig `json:"-"`
 
 	// 供应商特有字段透传 (AxonHub 风格 TransformerMetadata)。
 	// 包含: cache_control 断点、thinking type/display 等无法映射到 unified 标准字段的供应商专有数据。

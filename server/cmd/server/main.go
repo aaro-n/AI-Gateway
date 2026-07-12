@@ -19,6 +19,7 @@ import (
 	coreHandler "ai-gateway/internal/core/handler"
 	"ai-gateway/internal/core/registry"
 	"ai-gateway/internal/debug"
+	"ai-gateway/internal/email"
 	"ai-gateway/internal/handler"
 	"ai-gateway/internal/mcp"
 	"ai-gateway/internal/middleware"
@@ -62,6 +63,17 @@ func main() {
 
 	// ── 内存环形日志缓冲区（供调试页面查看运行时日志）──
 	coreErrors.EnableRingBuffer(500)
+
+	// ── 邮件服务初始化 ──
+	email.Init(email.Config{
+		Enabled:  cfg.SMTP.Enabled,
+		Host:     cfg.SMTP.Host,
+		Port:     cfg.SMTP.Port,
+		Username: cfg.SMTP.Username,
+		Password: cfg.SMTP.Password,
+		From:     cfg.SMTP.From,
+		UseTLS:   cfg.SMTP.UseTLS,
+	})
 
 	// ── OpenTelemetry 初始化 ──
 	ctx := context.Background()
@@ -166,6 +178,8 @@ func main() {
 	modelTestHandler := handler.NewModelTestHandler()
 	protocolCompareHandler := handler.NewProtocolCompareHandler()
 	debugHandler := handler.NewDebugHandler()
+	adminHandler := &handler.AdminHandler{}
+	userHandler := handler.NewUserHandler()
 
 	// Unified Gateway（基于 Registry + Unified 中间表示，轴辐式协议转换）
 	unifiedGatewayHandler := coreHandler.NewUnifiedGatewayHandler()
@@ -190,6 +204,8 @@ func main() {
 		{
 			auth.POST("/login", authHandler.Login)
 			auth.POST("/logout", authHandler.Logout)
+			auth.POST("/forgot-password", authHandler.ForgotPassword)
+			auth.POST("/reset-password", authHandler.ResetPassword)
 		}
 
 		protected := api.Group("")
@@ -199,6 +215,8 @@ func main() {
 			protected.GET("/auth/me", authHandler.Me)
 			protected.PUT("/auth/password", authHandler.ChangePassword)
 			protected.PUT("/auth/timezone", authHandler.UpdateTimeZone)
+			protected.PUT("/auth/profile", authHandler.UpdateProfile)
+			protected.PUT("/auth/username", authHandler.UpdateUsername)
 
 			protected.GET("/providers", providerHandler.List)
 			protected.GET("/providers/meta/protocols", providerHandler.GetProtocolsMeta)
@@ -321,6 +339,25 @@ func main() {
 			protected.POST("/debug/test-key", debugHandler.TestKey)
 			protected.GET("/debug/recent-logs", debugHandler.RecentLogs)
 			protected.GET("/debug/server-logs", debugHandler.ServerLogs)
+
+			// ── 管理员操作 ──
+			adminGroup := protected.Group("/admin")
+			adminGroup.Use(middleware.RequireAdmin())
+			{
+				adminGroup.POST("/reload-config", adminHandler.ReloadConfig)
+				adminGroup.GET("/smtp", adminHandler.GetSMTP)
+				adminGroup.POST("/smtp", adminHandler.SaveSMTP)
+				adminGroup.POST("/smtp/test", adminHandler.TestSMTP)
+
+				// 用户管理
+				adminGroup.GET("/users", userHandler.ListUsers)
+				adminGroup.POST("/users", userHandler.CreateUser)
+				adminGroup.PUT("/users/:id", userHandler.UpdateUser)
+				adminGroup.DELETE("/users/:id", userHandler.DeleteUser)
+				adminGroup.GET("/users/:id/permissions", userHandler.GetUserPermissions)
+				adminGroup.PUT("/users/:id/permissions", userHandler.UpdateUserPermissions)
+			}
+
 			// ── Prometheus Metrics 端点 ──
 			if cfg.Monitor.Prometheus.Enabled {
 				if token := cfg.Monitor.Prometheus.MetricsToken; token != "" {
@@ -354,9 +391,9 @@ func main() {
 		Handler: r,
 	}
 
-	// 优雅关闭：SIGINT / SIGTERM
+	// 优雅关闭 & SIGHUP 热加载
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
 		log.Printf("Server starting on %s", addr)
@@ -365,14 +402,30 @@ func main() {
 		}
 	}()
 
-	<-quit
-	log.Println("Shutting down server...")
+	go func() {
+		for sig := range quit {
+			if sig == syscall.SIGHUP {
+				log.Println("[Config] Received SIGHUP, reloading config...")
+				if err := config.Reload(); err != nil {
+					log.Printf("[Config] SIGHUP reload failed: %v", err)
+				} else {
+					log.Println("[Config] SIGHUP reload successful")
+				}
+				continue
+			}
+			// SIGINT / SIGTERM → 关闭
+			log.Println("Shutting down server...")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(ctx); err != nil {
+				log.Fatalf("Server forced to shutdown: %v", err)
+			}
+			log.Println("Server exited gracefully")
+			os.Exit(0)
+		}
+	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	log.Println("Server exited gracefully")
+	// 阻塞主 goroutine，等待信号触发 os.Exit
+	// Go 的 http.ListenAndServe / signal goroutine 在后台运行
+	select {}
 }

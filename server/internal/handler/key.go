@@ -15,6 +15,10 @@ import (
 	"ai-gateway/internal/model"
 )
 
+// =============================================================================
+// 类型定义
+// =============================================================================
+
 type KeyHandler struct{}
 
 type createKeyRequest struct {
@@ -53,36 +57,31 @@ type keyResponse struct {
 	Formats    map[string]string  `json:"formats,omitempty"`
 }
 
-type keyCreateResponse struct {
-	Key     keyResponse       `json:"key"`
-	RawKey  string            `json:"raw_key"`
-	Formats map[string]string `json:"formats,omitempty"`
+type keyListItemResponse struct {
+	ID                uint              `json:"id"`
+	Key               string            `json:"key"`
+	Name              string            `json:"name"`
+	Enabled           bool              `json:"enabled"`
+	AccessMode        string            `json:"access_mode"`
+	ExpiresAt         *time.Time        `json:"expires_at"`
+	CreatedAt         time.Time         `json:"created_at"`
+	Slug              string            `json:"slug"`
+	DirectCount       int               `json:"direct_count"`  // 直通模型数量 (key_provider_models)
+	MappingCount      int               `json:"mapping_count"` // 映射模型数量 (key_models)
+	MCPToolsCount     int               `json:"mcp_tools_count"`
+	MCPResourcesCount int               `json:"mcp_resources_count"`
+	MCPPromptsCount   int               `json:"mcp_prompts_count"`
+	Format            string            `json:"format"` // 主格式
+	Formats           map[string]string `json:"formats,omitempty"`
 }
 
-type keyMCPToolResponse struct {
-	ID       uint   `json:"id"`
-	ToolID   uint   `json:"tool_id"`
-	ToolName string `json:"tool_name"`
-	MCPID    uint   `json:"mcp_id"`
-	MCPName  string `json:"mcp_name"`
+type resetKeyRequest struct {
+	Format string `json:"format"` // "openai", "anthropic", "gemini"
 }
 
-type keyMCPResourceResponse struct {
-	ID           uint   `json:"id"`
-	ResourceID   uint   `json:"resource_id"`
-	ResourceName string `json:"resource_name"`
-	ResourceURI  string `json:"resource_uri"`
-	MCPID        uint   `json:"mcp_id"`
-	MCPName      string `json:"mcp_name"`
-}
-
-type keyMCPPromptResponse struct {
-	ID         uint   `json:"id"`
-	PromptID   uint   `json:"prompt_id"`
-	PromptName string `json:"prompt_name"`
-	MCPID      uint   `json:"mcp_id"`
-	MCPName    string `json:"mcp_name"`
-}
+// =============================================================================
+// 构造函数 & 生成函数
+// =============================================================================
 
 func NewKeyHandler() *KeyHandler {
 	return &KeyHandler{}
@@ -155,36 +154,14 @@ func createFormatForKey(keyID uint, format string) (map[string]string, error) {
 	return formats, nil
 }
 
-type keyListItemResponse struct {
-	ID                uint              `json:"id"`
-	Key               string            `json:"key"`
-	Name              string            `json:"name"`
-	Enabled           bool              `json:"enabled"`
-	AccessMode        string            `json:"access_mode"`
-	ExpiresAt         *time.Time        `json:"expires_at"`
-	CreatedAt         time.Time         `json:"created_at"`
-	Slug              string            `json:"slug"`
-	DirectCount       int               `json:"direct_count"`  // 直通模型数量 (key_provider_models)
-	MappingCount      int               `json:"mapping_count"` // 映射模型数量 (key_models)
-	MCPToolsCount     int               `json:"mcp_tools_count"`
-	MCPResourcesCount int               `json:"mcp_resources_count"`
-	MCPPromptsCount   int               `json:"mcp_prompts_count"`
-	Format            string            `json:"format"` // 主格式
-	Formats           map[string]string `json:"formats,omitempty"`
-}
-
 // getPrimaryFormat 从 formats map 中提取主格式。
-// 创建密钥时，非 openai 格式会同时创建 openai 兼容格式，
-// 因此主格式 = 第一个非 openai 键；若只有 openai 则为 openai。
 func getPrimaryFormat(formats map[string]string) string {
 	if len(formats) == 0 {
 		return ""
 	}
-	// 如果有 openrouter，优先返回
 	if _, ok := formats["openrouter"]; ok {
 		return "openrouter"
 	}
-	// 找到第一个非 openai 的格式
 	for k := range formats {
 		if k != "openai" {
 			return k
@@ -193,9 +170,21 @@ func getPrimaryFormat(formats map[string]string) string {
 	return "openai"
 }
 
+// =============================================================================
+// 基础 CRUD
+// =============================================================================
+
 func (h *KeyHandler) List(c *gin.Context) {
 	var keys []model.Key
-	if err := model.DB.Preload("Models.Model").Preload("Formats").Order("name ASC").Find(&keys).Error; err != nil {
+	query := model.DB.Preload("Models.Model").Preload("Formats")
+
+	// 普通用户只能看到自己的密钥
+	if !IsAdmin(c) {
+		userID := GetCurrentUserID(c)
+		query = query.Where("user_id = ?", userID)
+	}
+
+	if err := query.Order("name ASC").Find(&keys).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -256,7 +245,6 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	var expiresAt *time.Time
 	if req.ExpiresAt != nil {
-		// 用户输入按服务器本地时区（AG_TIME_ZONE）解析，存储时由 GORM NowFunc 转 UTC
 		t, err := time.ParseInLocation("2006-01-02 15:04:05", *req.ExpiresAt, time.Local)
 		if err == nil {
 			expiresAt = &t
@@ -268,7 +256,6 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		accessMode = "hybrid"
 	}
 
-	// 生成主密钥：如果指定了格式则使用对应格式，否则使用默认 sk- 前缀
 	rawKey := generateKey()
 	if req.Format != "" {
 		rawKey = generateKeyFormat(req.Format)
@@ -282,12 +269,16 @@ func (h *KeyHandler) Create(c *gin.Context) {
 		AccessMode: accessMode,
 	}
 
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		key.UserID = &uid
+	}
+
 	if err := model.DB.Create(&key).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 创建格式化密钥：如果指定了 format 则只创建该格式，否则创建全部格式
 	var formats map[string]string
 	var fmtErr error
 	if req.Format != "" {
@@ -306,41 +297,26 @@ func (h *KeyHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + strconv.FormatUint(uint64(modelID), 10)})
 			return
 		}
-		akm := model.KeyModel{
-			KeyID:   key.ID,
-			ModelID: modelID,
-		}
+		akm := model.KeyModel{KeyID: key.ID, ModelID: modelID}
 		model.DB.Create(&akm)
 	}
 
 	model.DB.Preload("Models.Model").First(&key, key.ID)
-
 	models := make([]keyModelResponse, len(key.Models))
 	for j, m := range key.Models {
 		modelName := ""
 		if m.Model != nil {
 			modelName = m.Model.Name
 		}
-		models[j] = keyModelResponse{
-			ID:        m.ID,
-			ModelID:   m.ModelID,
-			ModelName: modelName,
-		}
+		models[j] = keyModelResponse{ID: m.ID, ModelID: m.ModelID, ModelName: modelName}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"key": keyResponse{
-			ID:         key.ID,
-			Slug:       key.Slug,
-			Key:        rawKey,
-			Name:       key.Name,
-			Enabled:    key.Enabled,
-			AccessMode: key.AccessMode,
-			ExpiresAt:  key.ExpiresAt,
-			CreatedAt:  key.CreatedAt,
-			Format:     getPrimaryFormat(formats),
-			Models:     models,
-			Formats:    formats,
+			ID: key.ID, Slug: key.Slug, Key: rawKey, Name: key.Name,
+			Enabled: key.Enabled, AccessMode: key.AccessMode,
+			ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
+			Format: getPrimaryFormat(formats), Models: models, Formats: formats,
 		},
 		"raw_key": rawKey,
 		"formats": formats,
@@ -354,7 +330,19 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 硬删除关联表
+	var key model.Key
+	if err := model.DB.First(&key, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
+		return
+	}
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		if key.UserID == nil || *key.UserID != uid {
+			c.JSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+			return
+		}
+	}
+
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyModel{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyProvider{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPTool{})
@@ -362,7 +350,6 @@ func (h *KeyHandler) Delete(c *gin.Context) {
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPPrompt{})
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyFormat{})
 
-	// 软删除 Key
 	if err := model.DB.Delete(&model.Key{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -382,6 +369,14 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	if err := model.DB.First(&key, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
 		return
+	}
+
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		if key.UserID == nil || *key.UserID != uid {
+			c.JSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+			return
+		}
 	}
 
 	var req updateKeyRequest
@@ -421,24 +416,18 @@ func (h *KeyHandler) Update(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "model not found: " + strconv.FormatUint(uint64(modelID), 10)})
 				return
 			}
-			akm := model.KeyModel{KeyID: key.ID, ModelID: modelID}
-			model.DB.Create(&akm)
+			model.DB.Create(&model.KeyModel{KeyID: key.ID, ModelID: modelID})
 		}
 	}
 
 	model.DB.Preload("Models.Model").Preload("Formats").First(&key, id)
-
 	models := make([]keyModelResponse, len(key.Models))
 	for j, m := range key.Models {
 		modelName := ""
 		if m.Model != nil {
 			modelName = m.Model.Name
 		}
-		models[j] = keyModelResponse{
-			ID:        m.ID,
-			ModelID:   m.ModelID,
-			ModelName: modelName,
-		}
+		models[j] = keyModelResponse{ID: m.ID, ModelID: m.ModelID, ModelName: modelName}
 	}
 
 	updateFormats := make(map[string]string)
@@ -447,564 +436,40 @@ func (h *KeyHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"key": keyResponse{
-		ID:         key.ID,
-		Slug:       key.Slug,
-		Key:        key.Key,
-		Name:       key.Name,
-		Enabled:    key.Enabled,
-		AccessMode: key.AccessMode,
-		ExpiresAt:  key.ExpiresAt,
-		CreatedAt:  key.CreatedAt,
-		Format:     getPrimaryFormat(updateFormats),
-		Models:     models,
+		ID: key.ID, Slug: key.Slug, Key: key.Key, Name: key.Name,
+		Enabled: key.Enabled, AccessMode: key.AccessMode,
+		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
+		Format: getPrimaryFormat(updateFormats), Models: models,
 	}})
 }
 
-type modelWithStatusResponse struct {
-	ID               uint   `json:"id"`
-	Name             string `json:"name"`
-	MappingCount     int    `json:"mapping_count"`
-	MinContextWindow int    `json:"min_context_window"`
-	MinMaxOutput     int    `json:"min_max_output"`
-	SupportsVision   bool   `json:"supports_vision"`
-	SupportsTools    bool   `json:"supports_tools"`
-	SupportsStream   bool   `json:"supports_stream"`
-	Selected         bool   `json:"selected"`
-	Enabled          bool   `json:"enabled"`
-}
+// =============================================================================
+// 辅助函数
+// =============================================================================
 
-func (h *KeyHandler) ListModels(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	// 获取白名单记录（用于 selected + enabled 标记）
-	var kmRows []model.KeyModel
-	model.DB.Where("key_id = ?", id).Find(&kmRows)
-	kmMap := make(map[uint]model.KeyModel) // model_id → row
-	for _, r := range kmRows {
-		kmMap[r.ModelID] = r
-	}
-
-	// 返回全部启用模型 + selected/enabled 标记（按 id 排序保证行序稳定）
-	var allModels []model.Model
-	if err := model.DB.Where("enabled = ?", true).Order("id ASC").Find(&allModels).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	result := make([]modelWithStatusResponse, len(allModels))
-	for i, m := range allModels {
-		var mappings []model.ModelMapping
-		model.DB.Preload("Provider").
-			Joins("JOIN providers ON providers.id = model_mappings.provider_id AND providers.enabled = ?", true).
-			Where("model_id = ? AND model_mappings.enabled = ?", m.ID, true).
-			Order("weight DESC").
-			Find(&mappings)
-
-		minContext, minOutput := calculateMinTokens(mappings)
-		supportsVision, supportsTools, supportsStream := calculateCapabilitiesIntersection(mappings)
-
-		row, exists := kmMap[m.ID]
-
-		result[i] = modelWithStatusResponse{
-			ID:               m.ID,
-			Name:             m.Name,
-			MappingCount:     len(mappings),
-			MinContextWindow: minContext,
-			MinMaxOutput:     minOutput,
-			SupportsVision:   supportsVision,
-			SupportsTools:    supportsTools,
-			SupportsStream:   supportsStream,
-			Selected:         exists,
-			Enabled:          exists && row.Enabled,
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"models": result})
-}
-
-func (h *KeyHandler) AddModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	modelID, err := strconv.ParseUint(c.Param("model_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
-		return
-	}
-
+// checkKeyOwnership 检查 key 是否存在且当前用户有权操作。
+func (h *KeyHandler) checkKeyOwnership(c *gin.Context, keyID uint) *model.Key {
 	var key model.Key
 	if err := model.DB.First(&key, keyID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
+		return nil
 	}
-
-	var m model.Model
-	if err := model.DB.First(&m, modelID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "model not found"})
-		return
-	}
-
-	// 重复检查：该虚拟模型名是否已在该 key 的"模型厂商"直通白名单中
-	if conflict := h.checkMappingModelConflict(uint(keyID), m.Name); conflict != "" {
-		c.JSON(http.StatusConflict, gin.H{"error": conflict})
-		return
-	}
-
-	var existing model.KeyModel
-	if err := model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).First(&existing).Error; err == nil {
-		// 已存在 → 启用
-		model.DB.Model(&existing).Update("enabled", true)
-		c.JSON(http.StatusOK, gin.H{"message": "model association enabled"})
-		return
-	}
-
-	keyModel := model.KeyModel{
-		KeyID:   uint(keyID),
-		ModelID: uint(modelID),
-		Enabled: true,
-	}
-	if err := model.DB.Create(&keyModel).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "model association added"})
-}
-
-func (h *KeyHandler) RemoveModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	modelID, err := strconv.ParseUint(c.Param("model_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
-		return
-	}
-
-	model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).Delete(&model.KeyModel{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "model association removed"})
-}
-
-func (h *KeyHandler) ClearModels(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Update("enabled", false)
-
-	c.JSON(http.StatusOK, gin.H{"message": "all model associations disabled"})
-}
-
-// EnableAllModels 批量启用映射白名单（全部设为 enabled=true）
-// PUT /keys/:id/models
-func (h *KeyHandler) EnableAllModels(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Update("enabled", true)
-	c.JSON(http.StatusOK, gin.H{"message": "all model associations enabled"})
-}
-
-// ToggleModel 切换映射模型启用状态
-// PUT /keys/:id/models/:model_id
-func (h *KeyHandler) ToggleModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	modelID, err := strconv.ParseUint(c.Param("model_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
-		return
-	}
-
-	var km model.KeyModel
-	if err := model.DB.Where("key_id = ? AND model_id = ?", keyID, modelID).First(&km).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "model not in whitelist"})
-		return
-	}
-	newVal := !km.Enabled
-	model.DB.Model(&km).Update("enabled", newVal)
-	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": newVal})
-}
-
-// ── Provider (模型厂商) handlers ──
-
-type providerWithStatus struct {
-	ID         uint   `json:"id"`
-	Name       string `json:"name"`
-	ModelCount int64  `json:"model_count"`
-	Config     string `json:"config"`
-	Protocol   string `json:"protocol"`
-	KeyPrefix  string `json:"key_prefix"`
-	Selected   bool   `json:"selected"`
-}
-
-func keyFormatToProtocol(format string) string {
-	switch format {
-	case "openai":
-		return "openai"
-	case "anthropic":
-		return "anthropic"
-	case "gemini":
-		return "gemini"
-	case "deepseek":
-		return "deepseek"
-	case "openrouter":
-		return "openrouter"
-	default:
-		return ""
-	}
-}
-
-func (h *KeyHandler) ListProviders(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	// 获取 key 格式确定协议类型
-	var keyFormats []model.KeyFormat
-	model.DB.Where("key_id = ?", keyID).Find(&keyFormats)
-
-	keyFormat := "openai"
-	for _, kf := range keyFormats {
-		if kf.Format != "openai" {
-			keyFormat = kf.Format
-			break
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		if key.UserID == nil || *key.UserID != uid {
+			c.JSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+			return nil
 		}
 	}
-	protocol := keyFormatToProtocol(keyFormat)
-
-	// 获取该协议下所有启用的 Provider
-	// 不再硬编码扁平列，改用 EndpointFor() 过滤（同时支持 JSON Endpoints 和扁平列 fallback）
-	var allProviders []model.Provider
-	model.DB.Where("enabled = ?", true).Find(&allProviders)
-	providers := make([]model.Provider, 0, len(allProviders))
-	for _, p := range allProviders {
-		if p.EndpointFor(protocol) != "" {
-			providers = append(providers, p)
-		}
-	}
-
-	// 获取已选中的 provider id
-	var selected []model.KeyProvider
-	model.DB.Where("key_id = ?", keyID).Find(&selected)
-	selectedIDs := make(map[uint]bool)
-	for _, s := range selected {
-		selectedIDs[s.ProviderID] = true
-	}
-
-	result := make([]providerWithStatus, 0, len(providers))
-	for _, p := range providers {
-		var count int64
-		model.DB.Model(&model.ProviderModel{}).Where("provider_id = ?", p.ID).Count(&count)
-
-		result = append(result, providerWithStatus{
-			ID:         p.ID,
-			Name:       p.Name,
-			ModelCount: count,
-			Config:     p.Config,
-			Protocol:   protocol,
-			KeyPrefix:  "",
-			Selected:   selectedIDs[p.ID],
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"providers": result})
+	return &key
 }
 
-func (h *KeyHandler) AddProvider(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	providerID, err := strconv.ParseUint(c.Param("provider_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, keyID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-	var prov model.Provider
-	if err := model.DB.First(&prov, providerID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
-		return
-	}
-
-	var existing model.KeyProvider
-	if err := model.DB.Where("key_id = ? AND provider_id = ?", keyID, providerID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "already added"})
-		return
-	}
-
-	kp := model.KeyProvider{
-		KeyID:      uint(keyID),
-		ProviderID: uint(providerID),
-	}
-	model.DB.Create(&kp)
-
-	c.JSON(http.StatusOK, gin.H{"message": "provider added"})
-}
-
-func (h *KeyHandler) RemoveProvider(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	providerID, err := strconv.ParseUint(c.Param("provider_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
-		return
-	}
-
-	model.DB.Where("key_id = ? AND provider_id = ?", keyID, providerID).Delete(&model.KeyProvider{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "provider removed"})
-}
-
-func (h *KeyHandler) ClearProviders(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyProvider{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "all providers cleared"})
-}
-
-// =============================================================================
-// KeyProviderModel — 模型ID级别的直通白名单
-// =============================================================================
-
-type providerModelWithStatusResponse struct {
-	ID            uint   `json:"id"`
-	ProviderID    uint   `json:"provider_id"`
-	ProviderName  string `json:"provider_name"`
-	ModelID       string `json:"model_id"`
-	DisplayName   string `json:"display_name"`
-	OwnedBy       string `json:"owned_by"`
-	ContextWindow int    `json:"context_window"`
-	MaxOutput     int    `json:"max_output"`
-	Selected      bool   `json:"selected"`
-	Enabled       bool   `json:"enabled"`
-}
-
-// ListProviderModels 列出某 key 可直通的模型（全量 + selected/enabled 标记）
-// GET /keys/:id/provider-models
-func (h *KeyHandler) ListProviderModels(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	// 获取白名单记录（用于 selected + enabled 标记）
-	var kpmRows []model.KeyProviderModel
-	model.DB.Where("key_id = ?", keyID).Find(&kpmRows)
-	kpmMap := make(map[uint]model.KeyProviderModel) // provider_model_id → row
-	for _, r := range kpmRows {
-		kpmMap[r.ProviderModelID] = r
-	}
-
-	// 获取 key 格式确定协议类型
-	var keyFormats []model.KeyFormat
-	model.DB.Where("key_id = ?", keyID).Find(&keyFormats)
-	keyFormat := "openai"
-	for _, kf := range keyFormats {
-		if kf.Format != "openai" {
-			keyFormat = kf.Format
-			break
-		}
-	}
-	protocol := keyFormatToProtocol(keyFormat)
-
-	// 按协议过滤：先查出所有已关联的 provider_models，再用 EndpointFor() 过滤
-	var allPms []model.ProviderModel
-	model.DB.Preload("Provider").
-		Joins("JOIN key_provider_models kpm ON kpm.provider_model_id = provider_models.id AND kpm.key_id = ?", uint(keyID)).
-		Joins("JOIN providers ON providers.id = provider_models.provider_id AND providers.enabled = ?", true).
-		Order("provider_models.id ASC").
-		Find(&allPms)
-
-	pms := make([]model.ProviderModel, 0, len(allPms))
-	for _, pm := range allPms {
-		if pm.Provider != nil && pm.Provider.EndpointFor(protocol) != "" {
-			pms = append(pms, pm)
-		}
-	}
-
-	result := make([]providerModelWithStatusResponse, 0, len(pms))
-	for _, pm := range pms {
-		providerName := ""
-		if pm.Provider != nil {
-			providerName = pm.Provider.Name
-		}
-		row, exists := kpmMap[pm.ID]
-		result = append(result, providerModelWithStatusResponse{
-			ID:            pm.ID,
-			ProviderID:    pm.ProviderID,
-			ProviderName:  providerName,
-			ModelID:       pm.ModelID,
-			DisplayName:   pm.DisplayName,
-			OwnedBy:       pm.OwnedBy,
-			ContextWindow: pm.ContextWindow,
-			MaxOutput:     pm.MaxOutput,
-			Selected:      exists,
-			Enabled:       exists && row.Enabled,
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{"models": result})
-}
-
-// AddProviderModel 添加直通模型（upsert: 已存在则启用，不存在则创建）
-// POST /keys/:id/provider-models/:pmid
-func (h *KeyHandler) AddProviderModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
-		return
-	}
-
-	var pm model.ProviderModel
-	if err := model.DB.First(&pm, pmid).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "provider model not found"})
-		return
-	}
-
-	// 重复检查：该 model_id 是否已在该 key 的"模型映射"白名单中
-	if conflict := h.checkModelIDConflict(uint(keyID), pm.ModelID); conflict != "" {
-		c.JSON(http.StatusConflict, gin.H{"error": conflict})
-		return
-	}
-
-	var existing model.KeyProviderModel
-	if err := model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).First(&existing).Error; err == nil {
-		// 已存在 → 启用
-		model.DB.Model(&existing).Update("enabled", true)
-		c.JSON(http.StatusOK, gin.H{"message": "provider model enabled"})
-		return
-	}
-
-	kpm := model.KeyProviderModel{
-		KeyID:           uint(keyID),
-		ProviderModelID: uint(pmid),
-		Enabled:         true,
-	}
-	if err := model.DB.Create(&kpm).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "provider model added"})
-}
-
-// RemoveProviderModel 从直通白名单移除一个模型
-// DELETE /keys/:id/provider-models/:pmid
-func (h *KeyHandler) RemoveProviderModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
-		return
-	}
-	model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).Delete(&model.KeyProviderModel{})
-	c.JSON(http.StatusOK, gin.H{"message": "provider model removed"})
-}
-
-// ClearProviderModels 批量禁用直通白名单（全部设为 enabled=false）
-// DELETE /keys/:id/provider-models
-func (h *KeyHandler) ClearProviderModels(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Update("enabled", false)
-	c.JSON(http.StatusOK, gin.H{"message": "all provider models disabled"})
-}
-
-// EnableAllProviderModels 批量启用直通白名单（全部设为 enabled=true）
-// PUT /keys/:id/provider-models
-func (h *KeyHandler) EnableAllProviderModels(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Update("enabled", true)
-	c.JSON(http.StatusOK, gin.H{"message": "all provider models enabled"})
-}
-
-// ToggleProviderModel 切换直通模型启用状态
-// PUT /keys/:id/provider-models/:pmid
-func (h *KeyHandler) ToggleProviderModel(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-	pmid, err := strconv.ParseUint(c.Param("pmid"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider model id"})
-		return
-	}
-
-	var kpm model.KeyProviderModel
-	if err := model.DB.Where("key_id = ? AND provider_model_id = ?", keyID, pmid).First(&kpm).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "provider model not in whitelist"})
-		return
-	}
-	newVal := !kpm.Enabled
-	model.DB.Model(&kpm).Update("enabled", newVal)
-	c.JSON(http.StatusOK, gin.H{"message": "toggled", "enabled": newVal})
-}
-
-// checkModelIDConflict 检查某个 modelID 是否同时出现在该 key 的"模型映射"白名单中。
-// 返回非空字符串表示有冲突（含冲突详情），空字符串表示无冲突。
+// checkModelIDConflict 检查 modelID 是否与"模型映射"白名单冲突。
 func (h *KeyHandler) checkModelIDConflict(keyID uint, modelID string) string {
-	// 该 provider_model 的 model_id 是否与某个虚拟模型(models.name)同名，
-	// 且该虚拟模型已在该 key 的 key_models 白名单中。
 	var kmIDs []uint
 	model.DB.Model(&model.KeyModel{}).Where("key_id = ?", keyID).Pluck("model_id", &kmIDs)
 	if len(kmIDs) == 0 {
-		return "" // 映射白名单为空 = 全部允许，不构成"重复"（直通优先即可）
+		return ""
 	}
 	var m model.Model
 	if err := model.DB.Where("name = ? AND id IN ?", modelID, kmIDs).First(&m).Error; err != nil {
@@ -1013,7 +478,7 @@ func (h *KeyHandler) checkModelIDConflict(keyID uint, modelID string) string {
 	return fmt.Sprintf("该模型已在「模型映射」白名单中，请先从「模型映射」中移除 %s，再添加为直通模型", modelID)
 }
 
-// checkMappingModelConflict 检查添加虚拟模型到映射白名单时，是否与直通白名单冲突。
+// checkMappingModelConflict 检查虚拟模型名是否与直通白名单冲突。
 func (h *KeyHandler) checkMappingModelConflict(keyID uint, virtualModelName string) string {
 	var kpmIDs []uint
 	model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", keyID).Pluck("provider_model_id", &kpmIDs)
@@ -1027,6 +492,10 @@ func (h *KeyHandler) checkMappingModelConflict(keyID uint, virtualModelName stri
 	return fmt.Sprintf("该模型已在「模型厂商」直通白名单中，请先从「模型厂商」中移除 %s，再添加为映射模型", virtualModelName)
 }
 
+// =============================================================================
+// Get / Reset
+// =============================================================================
+
 func (h *KeyHandler) Get(c *gin.Context) {
 	id, err := middleware.GetID(c)
 	if err != nil {
@@ -1038,6 +507,14 @@ func (h *KeyHandler) Get(c *gin.Context) {
 	if err := model.DB.Preload("Formats").First(&key, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
 		return
+	}
+
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		if key.UserID == nil || *key.UserID != uid {
+			c.JSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+			return
+		}
 	}
 
 	maskedKey := key.Key
@@ -1056,21 +533,11 @@ func (h *KeyHandler) Get(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
-			ID:        key.ID,
-			Slug:      key.Slug,
-			Key:       maskedKey,
-			Name:      key.Name,
-			Enabled:   key.Enabled,
-			ExpiresAt: key.ExpiresAt,
-			CreatedAt: key.CreatedAt,
-			Format:    getPrimaryFormat(formats),
-			Formats:   formats,
+			ID: key.ID, Slug: key.Slug, Key: maskedKey, Name: key.Name,
+			Enabled: key.Enabled, ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
+			Format: getPrimaryFormat(formats), Formats: formats,
 		},
 	})
-}
-
-type resetKeyRequest struct {
-	Format string `json:"format"` // "openai", "anthropic", "gemini"
 }
 
 func (h *KeyHandler) Reset(c *gin.Context) {
@@ -1081,7 +548,7 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 	}
 
 	var req resetKeyRequest
-	c.ShouldBindJSON(&req) // optional body
+	c.ShouldBindJSON(&req)
 
 	var key model.Key
 	if err := model.DB.First(&key, id).Error; err != nil {
@@ -1089,7 +556,14 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 		return
 	}
 
-	// 如果指定了format则使用对应格式，否则使用默认sk-前缀
+	if !IsAdmin(c) {
+		uid := GetCurrentUserID(c)
+		if key.UserID == nil || *key.UserID != uid {
+			c.JSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+			return
+		}
+	}
+
 	rawKey := generateKey()
 	if req.Format != "" {
 		rawKey = generateKeyFormat(req.Format)
@@ -1100,7 +574,6 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 		return
 	}
 
-	// Delete existing key formats and generate new ones
 	model.DB.Where("key_id = ?", id).Delete(&model.KeyFormat{})
 	var formats map[string]string
 	if req.Format != "" {
@@ -1114,18 +587,13 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 	}
 
 	model.DB.Preload("Models.Model").First(&key, id)
-
 	models := make([]keyModelResponse, len(key.Models))
 	for j, m := range key.Models {
 		modelName := ""
 		if m.Model != nil {
 			modelName = m.Model.Name
 		}
-		models[j] = keyModelResponse{
-			ID:        m.ID,
-			ModelID:   m.ModelID,
-			ModelName: modelName,
-		}
+		models[j] = keyModelResponse{ID: m.ID, ModelID: m.ModelID, ModelName: modelName}
 	}
 
 	maskedKey := key.Key
@@ -1144,515 +612,12 @@ func (h *KeyHandler) Reset(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"key": keyResponse{
-			ID:         key.ID,
-			Slug:       key.Slug,
-			Key:        maskedKey,
-			Name:       key.Name,
-			Enabled:    key.Enabled,
-			AccessMode: key.AccessMode,
-			ExpiresAt:  key.ExpiresAt,
-			CreatedAt:  key.CreatedAt,
-			Format:     getPrimaryFormat(formats),
-			Models:     models,
-			Formats:    maskedFormats,
+			ID: key.ID, Slug: key.Slug, Key: maskedKey, Name: key.Name,
+			Enabled: key.Enabled, AccessMode: key.AccessMode,
+			ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
+			Format: getPrimaryFormat(formats), Models: models, Formats: maskedFormats,
 		},
 		"raw_key": rawKey,
 		"formats": formats,
 	})
-}
-
-type toolWithStatusResponse struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	MCPID       uint   `json:"mcp_id"`
-	MCPName     string `json:"mcp_name"`
-	Description string `json:"description"`
-	Selected    bool   `json:"selected"`
-}
-
-func (h *KeyHandler) GetMCPTools(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var allTools []model.MCPTool
-	if err := model.DB.Preload("MCP", "enabled = ?", true).
-		Joins("LEFT JOIN mcps ON mcps.id = mcp_tools.mcp_id").
-		Where("mcps.enabled = ? AND mcp_tools.enabled = ?", true, true).
-		Find(&allTools).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	var keyToolIDs []uint
-	model.DB.Model(&model.KeyMCPTool{}).Where("key_id = ?", id).Pluck("tool_id", &keyToolIDs)
-
-	keyToolMap := make(map[uint]bool)
-	for _, tid := range keyToolIDs {
-		keyToolMap[tid] = true
-	}
-
-	result := make([]toolWithStatusResponse, len(allTools))
-	for i, t := range allTools {
-		mcpName := ""
-		if t.MCP != nil {
-			mcpName = t.MCP.Name
-		}
-		result[i] = toolWithStatusResponse{
-			ID:          t.ID,
-			Name:        t.Name,
-			MCPID:       t.MCPID,
-			MCPName:     mcpName,
-			Description: t.Description,
-			Selected:    keyToolMap[t.ID],
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"tools": result})
-}
-
-func (h *KeyHandler) AddMCPTool(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	toolID, err := strconv.ParseUint(c.Param("tool_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tool id"})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, keyID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	var tool model.MCPTool
-	if err := model.DB.First(&tool, toolID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "tool not found"})
-		return
-	}
-
-	var existing model.KeyMCPTool
-	if err := model.DB.Where("key_id = ? AND tool_id = ?", keyID, toolID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "association already exists"})
-		return
-	}
-
-	keyTool := model.KeyMCPTool{
-		KeyID:  uint(keyID),
-		ToolID: uint(toolID),
-	}
-	if err := model.DB.Create(&keyTool).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "tool association added"})
-}
-
-func (h *KeyHandler) RemoveMCPTool(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	toolID, err := strconv.ParseUint(c.Param("tool_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tool id"})
-		return
-	}
-
-	model.DB.Where("key_id = ? AND tool_id = ?", keyID, toolID).Delete(&model.KeyMCPTool{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "tool association removed"})
-}
-
-func (h *KeyHandler) ClearMCPTools(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyMCPTool{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "all tool associations cleared"})
-}
-
-func (h *KeyHandler) UpdateMCPTools(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var req struct {
-		ToolIDs []uint `json:"tool_ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPTool{})
-
-	for _, toolID := range req.ToolIDs {
-		var tool model.MCPTool
-		if err := model.DB.First(&tool, toolID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "tool not found: " + strconv.FormatUint(uint64(toolID), 10)})
-			return
-		}
-		keyTool := model.KeyMCPTool{
-			KeyID:  key.ID,
-			ToolID: toolID,
-		}
-		model.DB.Create(&keyTool)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "MCP tools updated"})
-}
-
-type resourceWithStatusResponse struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	MCPID       uint   `json:"mcp_id"`
-	MCPName     string `json:"mcp_name"`
-	Description string `json:"description"`
-	URI         string `json:"uri"`
-	MimeType    string `json:"mime_type"`
-	Selected    bool   `json:"selected"`
-}
-
-func (h *KeyHandler) GetMCPResources(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var allResources []model.MCPResource
-	if err := model.DB.Preload("MCP", "enabled = ?", true).
-		Joins("LEFT JOIN mcps ON mcps.id = mcp_resources.mcp_id").
-		Where("mcps.enabled = ? AND mcp_resources.enabled = ?", true, true).
-		Find(&allResources).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	var keyResourceIDs []uint
-	model.DB.Model(&model.KeyMCPResource{}).Where("key_id = ?", id).Pluck("resource_id", &keyResourceIDs)
-
-	keyResourceMap := make(map[uint]bool)
-	for _, rid := range keyResourceIDs {
-		keyResourceMap[rid] = true
-	}
-
-	result := make([]resourceWithStatusResponse, len(allResources))
-	for i, r := range allResources {
-		mcpName := ""
-		if r.MCP != nil {
-			mcpName = r.MCP.Name
-		}
-		result[i] = resourceWithStatusResponse{
-			ID:          r.ID,
-			Name:        r.Name,
-			MCPID:       r.MCPID,
-			MCPName:     mcpName,
-			Description: r.Description,
-			URI:         r.URI,
-			MimeType:    r.MimeType,
-			Selected:    keyResourceMap[r.ID],
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"resources": result})
-}
-
-func (h *KeyHandler) AddMCPResource(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	resourceID, err := strconv.ParseUint(c.Param("resource_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource id"})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, keyID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	var resource model.MCPResource
-	if err := model.DB.First(&resource, resourceID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
-		return
-	}
-
-	var existing model.KeyMCPResource
-	if err := model.DB.Where("key_id = ? AND resource_id = ?", keyID, resourceID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "association already exists"})
-		return
-	}
-
-	keyResource := model.KeyMCPResource{
-		KeyID:      uint(keyID),
-		ResourceID: uint(resourceID),
-	}
-	if err := model.DB.Create(&keyResource).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "resource association added"})
-}
-
-func (h *KeyHandler) RemoveMCPResource(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	resourceID, err := strconv.ParseUint(c.Param("resource_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resource id"})
-		return
-	}
-
-	model.DB.Where("key_id = ? AND resource_id = ?", keyID, resourceID).Delete(&model.KeyMCPResource{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "resource association removed"})
-}
-
-func (h *KeyHandler) ClearMCPResources(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyMCPResource{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "all resource associations cleared"})
-}
-
-func (h *KeyHandler) UpdateMCPResources(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var req struct {
-		ResourceIDs []uint `json:"resource_ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPResource{})
-
-	for _, resourceID := range req.ResourceIDs {
-		var resource model.MCPResource
-		if err := model.DB.First(&resource, resourceID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "resource not found: " + strconv.FormatUint(uint64(resourceID), 10)})
-			return
-		}
-		keyResource := model.KeyMCPResource{
-			KeyID:      key.ID,
-			ResourceID: resourceID,
-		}
-		model.DB.Create(&keyResource)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "MCP resources updated"})
-}
-
-type promptWithStatusResponse struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	MCPID       uint   `json:"mcp_id"`
-	MCPName     string `json:"mcp_name"`
-	Description string `json:"description"`
-	Selected    bool   `json:"selected"`
-}
-
-func (h *KeyHandler) GetMCPPrompts(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var allPrompts []model.MCPPrompt
-	if err := model.DB.Preload("MCP", "enabled = ?", true).
-		Joins("LEFT JOIN mcps ON mcps.id = mcp_prompts.mcp_id").
-		Where("mcps.enabled = ? AND mcp_prompts.enabled = ?", true, true).
-		Find(&allPrompts).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	var keyPromptIDs []uint
-	model.DB.Model(&model.KeyMCPPrompt{}).Where("key_id = ?", id).Pluck("prompt_id", &keyPromptIDs)
-
-	keyPromptMap := make(map[uint]bool)
-	for _, pid := range keyPromptIDs {
-		keyPromptMap[pid] = true
-	}
-
-	result := make([]promptWithStatusResponse, len(allPrompts))
-	for i, p := range allPrompts {
-		mcpName := ""
-		if p.MCP != nil {
-			mcpName = p.MCP.Name
-		}
-		result[i] = promptWithStatusResponse{
-			ID:          p.ID,
-			Name:        p.Name,
-			MCPID:       p.MCPID,
-			MCPName:     mcpName,
-			Description: p.Description,
-			Selected:    keyPromptMap[p.ID],
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"prompts": result})
-}
-
-func (h *KeyHandler) AddMCPPrompt(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	promptID, err := strconv.ParseUint(c.Param("prompt_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, keyID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	var prompt model.MCPPrompt
-	if err := model.DB.First(&prompt, promptID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "prompt not found"})
-		return
-	}
-
-	var existing model.KeyMCPPrompt
-	if err := model.DB.Where("key_id = ? AND prompt_id = ?", keyID, promptID).First(&existing).Error; err == nil {
-		c.JSON(http.StatusOK, gin.H{"message": "association already exists"})
-		return
-	}
-
-	keyPrompt := model.KeyMCPPrompt{
-		KeyID:    uint(keyID),
-		PromptID: uint(promptID),
-	}
-	if err := model.DB.Create(&keyPrompt).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "prompt association added"})
-}
-
-func (h *KeyHandler) RemoveMCPPrompt(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	promptID, err := strconv.ParseUint(c.Param("prompt_id"), 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
-		return
-	}
-
-	model.DB.Where("key_id = ? AND prompt_id = ?", keyID, promptID).Delete(&model.KeyMCPPrompt{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "prompt association removed"})
-}
-
-func (h *KeyHandler) ClearMCPPrompts(c *gin.Context) {
-	keyID, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", keyID).Delete(&model.KeyMCPPrompt{})
-
-	c.JSON(http.StatusOK, gin.H{"message": "all prompt associations cleared"})
-}
-
-func (h *KeyHandler) UpdateMCPPrompts(c *gin.Context) {
-	id, err := middleware.GetID(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
-		return
-	}
-
-	var req struct {
-		PromptIDs []uint `json:"prompt_ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var key model.Key
-	if err := model.DB.First(&key, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
-		return
-	}
-
-	model.DB.Where("key_id = ?", id).Delete(&model.KeyMCPPrompt{})
-
-	for _, promptID := range req.PromptIDs {
-		var prompt model.MCPPrompt
-		if err := model.DB.First(&prompt, promptID).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "prompt not found: " + strconv.FormatUint(uint64(promptID), 10)})
-			return
-		}
-		keyPrompt := model.KeyMCPPrompt{
-			KeyID:    key.ID,
-			PromptID: promptID,
-		}
-		model.DB.Create(&keyPrompt)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "MCP prompts updated"})
 }

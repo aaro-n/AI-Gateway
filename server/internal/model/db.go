@@ -22,14 +22,20 @@ type User struct {
 	ID           uint   `gorm:"primaryKey"`
 	Username     string `gorm:"uniqueIndex"`
 	PasswordHash string
+	DisplayName  string `gorm:"size:100;default:''"` // 显示名称
+	Email        string `gorm:"size:200;default:''"` // 邮箱（用于找回密码）
 	Role         string `gorm:"default:admin"`
 	Enabled      bool   `gorm:"type:boolean;default:true"`
 	// TimeZone 用户偏好时区（IANA 时区名，如 "Asia/Shanghai"、"America/New_York"）。
 	// 空值表示使用服务器默认时区（AG_TIME_ZONE）。
-	TimeZone  string `gorm:"size:64;default:''"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt gorm.DeletedAt
+	TimeZone string `gorm:"size:64;default:''"`
+	Language string `gorm:"size:10;default:''"` // 语言偏好 zh/en，空=浏览器自动
+	// 密码重置
+	ResetToken       string     `gorm:"size:128;default:''"`
+	ResetTokenExpiry *time.Time // 重置令牌过期时间
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	DeletedAt        gorm.DeletedAt
 }
 
 func (User) TableName() string {
@@ -305,6 +311,8 @@ type Key struct {
 	Enabled    bool   `gorm:"type:boolean;default:true"`
 	AccessMode string `gorm:"type:varchar(50);default:'hybrid'"` // "mapping", "direct", "hybrid"
 
+	UserID *uint `gorm:"index"` // 所属用户ID（NULL=管理员创建/旧数据）
+
 	ExpiresAt *time.Time
 	CreatedAt time.Time
 	DeletedAt gorm.DeletedAt
@@ -517,6 +525,38 @@ func (u *MCPLog) String() string {
 	)
 }
 
+// ── 用户权限模型 ──
+
+// UserProvider 用户可访问的模型厂商（admin 授予）。
+type UserProvider struct {
+	ID         uint `gorm:"primaryKey"`
+	UserID     uint `gorm:"index;not null;uniqueIndex:idx_user_provider"`
+	ProviderID uint `gorm:"index;not null;uniqueIndex:idx_user_provider"`
+
+	CreatedAt time.Time
+	Provider  *Provider `gorm:"foreignKey:ProviderID"`
+	User      *User     `gorm:"foreignKey:UserID"`
+}
+
+func (UserProvider) TableName() string {
+	return "user_providers"
+}
+
+// UserModel 用户可访问的映射模型（admin 授予）。
+type UserModel struct {
+	ID      uint `gorm:"primaryKey"`
+	UserID  uint `gorm:"index;not null;uniqueIndex:idx_user_model"`
+	ModelID uint `gorm:"index;not null;uniqueIndex:idx_user_model"`
+
+	CreatedAt time.Time
+	Model     *Model `gorm:"foreignKey:ModelID"`
+	User      *User  `gorm:"foreignKey:UserID"`
+}
+
+func (UserModel) TableName() string {
+	return "user_models"
+}
+
 func InitDB(
 	dbType, dbPath, dbURL, dbHost string, dbPort int, dbUser, dbPassword, dbName string,
 	maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration,
@@ -625,6 +665,8 @@ func autoMigrate() error {
 		&ModelLog{},
 		&TestResult{},
 		&MCPLog{},
+		&UserProvider{},
+		&UserModel{},
 	)
 }
 

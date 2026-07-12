@@ -21,6 +21,7 @@ type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 	Auth     AuthConfig
+	SMTP     SMTPConfig
 	Pprof    PprofConfig
 	Monitor  MonitorConfig
 }
@@ -47,6 +48,8 @@ type ServerConfig struct {
 	Session         SessionConfig
 	TestConcurrency int    // 模型测试并发数，默认 5，环境变量 AG_TEST_CONCURRENCY
 	TimeZone        string // 应用时区，如 "Asia/Shanghai"、"UTC"，默认 "UTC"，环境变量 AG_TIME_ZONE
+	Domain          string // 服务器公网域名（用于生成密码重置链接等），环境变量 AG_SERVER_DOMAIN
+	DefaultLanguage string // 默认界面语言（zh/en），默认 "zh"，环境变量 AG_DEFAULT_LANGUAGE
 }
 
 type DebugConfig struct {
@@ -93,6 +96,20 @@ type DefaultAdminConfig struct {
 	Password string `validate:"min=1"`
 }
 
+// SMTPConfig 邮件服务配置，用于密码重置等场景。
+// 支持 STARTTLS (587) 和 TLS 直连 (465)。
+// 环境变量前缀: AG_SMTP_
+type SMTPConfig struct {
+	Enabled      bool   `yaml:"enabled"`        // 是否启用邮件功能
+	Host         string `yaml:"host"`           // SMTP 服务器地址
+	Port         int    `yaml:"port"`           // 端口（587 STARTTLS / 465 TLS）
+	Username     string `yaml:"username"`       // 发件人认证账号
+	Password     string `yaml:"password"`       // 发件人认证密码/授权码
+	From         string `yaml:"from"`           // 发件人地址，如 "AI Gateway <noreply@example.com>"
+	UseTLS       bool   `yaml:"use_tls"`        // true=TLS直连(465) false=STARTTLS(587)
+	LogResetLink bool   `yaml:"log_reset_link"` // 开启后将重置链接打印到日志，方便管理员从日志提取
+}
+
 type PprofConfig struct {
 	Port int `validate:"min=0,max=65535"`
 }
@@ -121,7 +138,7 @@ func loadYAML(configPath string) *Config {
 }
 
 func Load() *Config {
-	configPath := "config.yaml"
+	configPath = "config.yaml"
 
 	yamlCfg := loadYAML(configPath)
 
@@ -140,6 +157,7 @@ func Load() *Config {
 		trustedProxies = []string{"10.0.0.0/8", "192.168.0.0/16", "172.16.0.0/12"}
 	}
 
+	reloadMu.Lock()
 	cfg = &Config{
 		Debug: DebugConfig{
 			Gin:      getBool("AG_DEBUG_GIN", yamlCfg.Debug.Gin),
@@ -153,6 +171,8 @@ func Load() *Config {
 			TrustedProxies:  trustedProxies,
 			TestConcurrency: getInt("AG_TEST_CONCURRENCY", yamlCfg.Server.TestConcurrency),
 			TimeZone:        getEnv("AG_TIME_ZONE", yamlCfg.Server.TimeZone),
+			Domain:          getEnv("AG_SERVER_DOMAIN", yamlCfg.Server.Domain),
+			DefaultLanguage: getEnv("AG_DEFAULT_LANGUAGE", yamlCfg.Server.DefaultLanguage),
 			Session: SessionConfig{
 				Secret:   secret,
 				MaxAge:   getInt("AG_SERVER_SESSION_MAX_AGE", yamlCfg.Server.Session.MaxAge),
@@ -186,6 +206,16 @@ func Load() *Config {
 		Pprof: PprofConfig{
 			Port: getInt("AG_PPROF_PORT", yamlCfg.Pprof.Port),
 		},
+		SMTP: SMTPConfig{
+			Enabled:      getBool("AG_SMTP_ENABLED", yamlCfg.SMTP.Enabled),
+			Host:         getEnv("AG_SMTP_HOST", yamlCfg.SMTP.Host),
+			Port:         getInt("AG_SMTP_PORT", yamlCfg.SMTP.Port),
+			Username:     getEnv("AG_SMTP_USERNAME", yamlCfg.SMTP.Username),
+			Password:     getEnv("AG_SMTP_PASSWORD", yamlCfg.SMTP.Password),
+			From:         getEnv("AG_SMTP_FROM", yamlCfg.SMTP.From),
+			UseTLS:       getBool("AG_SMTP_USE_TLS", yamlCfg.SMTP.UseTLS),
+			LogResetLink: getBool("AG_SMTP_LOG_RESET_LINK", yamlCfg.SMTP.LogResetLink),
+		},
 		Monitor: MonitorConfig{
 			Prometheus: MonitorPrometheusConfig{
 				Enabled:      getBool("AG_MONITOR_PROMETHEUS_ENABLED", yamlCfg.Monitor.Prometheus.Enabled),
@@ -202,23 +232,26 @@ func Load() *Config {
 	applyDefaults()
 	applyTimeZone(cfg.Server.TimeZone)
 	if err := validate.Struct(cfg); err != nil {
+		reloadMu.Unlock()
 		log.Fatalf("[Config] Validation failed: %v", err)
 	}
 	logConfig()
+	reloadMu.Unlock()
 
 	return cfg
 }
 
 // applyTimeZone 加载并应用全局时区到 time.Local。
-// 无效时区会回退到 UTC 并记录警告。必须在日志/统计逻辑使用时间前调用。
+// 无效时区会回退到 Asia/Shanghai 并记录警告。必须在日志/统计逻辑使用时间前调用。
+// Go 的 time.LoadLocation 使用 IANA 时区数据库，自动处理夏令时（如 America/New_York）。
 func applyTimeZone(tz string) {
 	if tz == "" {
-		tz = "UTC"
+		tz = "Asia/Shanghai"
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		log.Printf("[Config] Warning: invalid time zone %q: %v, falling back to UTC", tz, err)
-		loc = time.UTC
+		log.Printf("[Config] Warning: invalid time zone %q: %v, falling back to Asia/Shanghai", tz, err)
+		loc = time.Local
 	}
 	time.Local = loc
 }
@@ -294,10 +327,6 @@ func getPoolDefaults(dbType string) PoolConfig {
 		MaxLifetime: time.Hour,
 		MaxIdleTime: 5 * time.Minute,
 	}
-}
-
-func Get() *Config {
-	return cfg
 }
 
 func getEnv(key, defaultValue string) string {
