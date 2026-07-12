@@ -99,35 +99,30 @@ flowchart TD
     A4 --> B
     A5 --> B
 
-    B["API Key 认证<br/>验证 Key 有效性和协议格式"]
-    --> C["模型路由<br/>Direct（直通）/ Mapping（映射）/ Hybrid（混合）"]
+    B["API Key 认证<br/>提取 Key → 校验格式 → 检查启用/过期"]
+    --> C["模型路由<br/>按 AccessMode 选择策略<br/>Hybrid: 直通优先 / Mapping: 映射优先 / Direct: 仅直通"]
 
-    --> D{"路由模式"}
+    --> D{"路由命中?"}
+    D -->|"No"| E["返回 404<br/>无可用 Provider"]
+    D -->|"Yes"| F["权限检查<br/>mapping 模式校验 Key 模型白名单"]
 
-    D -->|"Direct / Hybrid"| S1
-    D -->|"Mapping"| S2
+    F --> G["ToUnified<br/>入口协议 → 统一中间表示"]
+    G --> H["Thinking 管线<br/>推理强度校验 + 能力匹配"]
+    H --> I{"同协议?"}
 
-    subgraph 直通流程["直通流程 (Direct 穿透)"]
-        S1["Direct 路由<br/>provider_models.model_id 精确匹配"]
-        --> R1["请求后端 API<br/>同协议直通或跨协议转换"]
-        --> RES1["返回响应<br/>流式/非流式"]
-        --> TK1["Token 统计"]
-    end
+    I -->|"Yes"| J["直通 / 浅转换"]
+    I -->|"No"| K["深度转换<br/>能力差集检测<br/>FromUnified → 调用上游"]
 
-    subgraph 映射流程["映射流程 (Mapping 转换)"]
-        S2["映射路由<br/>虚拟Model → Mapping → ProviderModel"]
-        --> TR1["ToUnified<br/>入口协议 → 统一中间表示"]
-        --> R2["FromUnified<br/>统一表示 → 上游协议请求"]
-        --> TR2["FormatUnified<br/>上游响应 → 入口协议格式"]
-        --> RES2["返回响应<br/>流式/非流式"]
-        --> TK2["Token 统计"]
-    end
+    J --> L["执行 + Failover 循环"]
+    K --> L
 
-    TK1 --> I["用量记录<br/>写入 UsageLog"]
-    TK2 --> I
+    L --> M["上游响应"]
+    M --> N["FormatUnified<br/>上游格式 → 入口协议格式"]
+    N --> RES1["返回响应<br/>流式/非流式"]
+    RES1 --> TK1["Token 统计 + 用量记录<br/>写入 UsageLog + Prometheus"]
 ```
 
-### 路由决策流程
+### 路由决策流程（Mapping 模式）
 
 ```mermaid
 flowchart TD
@@ -135,19 +130,19 @@ flowchart TD
 
     B --> C{"Model 存在?"}
 
-    C -->|"No"| D["返回 null"]
+    C -->|"No"| D["返回 nil（404）"]
     C -->|"Yes"| E["查询 ModelMapping<br/>WHERE model_id = model.ID<br/>AND enabled = true<br/>ORDER BY weight DESC"]
 
     E --> F{"Mapping 列表为空?"}
 
-    F -->|"Yes"| G["返回 null"]
+    F -->|"Yes"| G["返回 nil（404）"]
     F -->|"No"| H["遍历每个 Mapping"]
 
-    H --> I["检查 Provider.enabled<br/>查询 ProviderModel<br/>WHERE is_available = true"]
+    H --> I["检查 Provider.enabled<br/>AND ProviderModel.is_available"]
 
-    I --> J["检查冷却状态<br/>IsCooldown?"]
+    I --> J["检查冷却/熔断状态<br/>IsCooldown?"]
 
-    J --> K{"冷却中?"}
+    J --> K{"冷却/熔断中?"}
 
     K -->|"Yes"| L["加入 allProviders<br/>记录冷却结束时间"]
     K -->|"No"| M["加入 availableProviders"]
@@ -155,36 +150,65 @@ flowchart TD
     L --> N{"availableProviders 为空?"}
     M --> O["返回 availableProviders[0]"]
 
-    N -->|"Yes"| P["返回最早恢复冷却的"]
+    N -->|"Yes"| P["返回最早恢复冷却的 Provider<br/>GetEarliestCooldownEnd"]
     N -->|"No"| O
 
-    P --> Q["GetEarliestCooldownEnd<br/>选择 cooldownUntil 最小的"]
-
-    Q --> R["返回该 Provider"]
+    P --> R["返回该 Provider"]
 ```
 
-### 故障转移机制
+### 故障转移 & 熔断机制
+
+实现了完整的 Circuit Breaker 模式（Closed → Open → HalfOpen → Closed）：
 
 ```mermaid
 flowchart TD
-    subgraph 记录状态
-        A["请求返回 429"] --> B{"5秒内重复?"}
-        B -->|"Yes"| C["忽略（缓冲）"]
-        B -->|"No"| D["consecutive429++"]
-        D --> E{"计数 ≥ 3?"}
-        E -->|"Yes"| F["进入冷却<br/>cooldownUntil = now + 30min"]
-        E -->|"No"| G["保持状态"]
-
-        H["请求成功"] --> I["重置计数<br/>consecutive429 = 0"]
+    subgraph 错误记录
+        A["上游错误"] --> A1{"错误类型?"}
+        A1 -->|"429 限流"| A2["Record429<br/>3秒内重复 → 忽略"]
+        A1 -->|"5xx / 超时"| A3["RecordError<br/>3秒内重复 → 忽略"]
+        A2 --> B["Consecutive429++"]
+        A3 --> C["ConsecutiveErrors++"]
+        B --> D{"总计 ≥ 3?"}
+        C --> D
+        D -->|"Yes"| E["熔断打开 (Open)<br/>cooldownUntil = now + 30min<br/>拒绝所有请求"]
+        D -->|"No"| G["保持 Closed 状态"]
     end
 
-    subgraph 配置刷新
-        J["Provider 启用/APIKey/BaseURL 更新"] --> K["清除所有冷却状态"]
+    subgraph 成功恢复
+        H["请求成功"] --> I["重置所有计数<br/>Consecutive429 = 0<br/>ConsecutiveErrors = 0<br/>CircuitClosed"]
     end
 
-    subgraph 冷却恢复
-        L["当前时间 > cooldownUntil"] --> M["自动恢复<br/>cooldownUntil = null"]
+    subgraph 半开探测
+        L["冷却时间到期"] --> M["转为 HalfOpen<br/>允许 1 次探测请求"]
+        M --> N{"探测结果?"}
+        N -->|"成功"| O["熔断关闭 (Closed)<br/>恢复正常"]
+        N -->|"失败"| P["重新熔断 (Open)<br/>重置冷却时间"]
     end
+```
+
+### Failover 重试循环
+
+实际请求时，网关会拿到**所有可用候选项**，逐一尝试直到成功：
+
+```mermaid
+flowchart TD
+    A["获取 allResults（全部候选 Provider）"] --> B["遍历候选项 i=0"]
+    B --> C["对候选项[i]执行请求"]
+    C --> D{"成功?"}
+    D -->|"Yes"| E["RecordSuccess(cand)<br/>返回响应"]
+    D -->|"No"| F{"是 429?"}
+    F -->|"Yes"| G["RecordRateLimit(cand)<br/>触发熔断计数"]
+    F -->|"No"| H["RecordError(cand)<br/>触发熔断计数"]
+    G --> I{"还有候选项?"}
+    H --> I
+    I -->|"Yes"| J["i++ 重试下一个"]
+    I -->|"No"| K["所有候选项失败<br/>返回错误"]
+    J --> C
+```
+
+### 配置更新触发冷却清除
+
+Provider 创建或更新时（APIKey/BaseURL 变更），自动清除该 Provider 下所有模型的冷却状态，使其立即可用。
 ```
 
 ## 快速开始
