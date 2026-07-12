@@ -246,6 +246,7 @@ server:
     - "172.16.0.0/12"
     - "192.168.0.0/16"
   test_concurrency: 5  # 模型测试并发数
+  domain: ""     # 公网域名（用于密码重置邮件中的链接，如 http://your-domain:18080）
   session:
     secret: ""    # Session 密钥（自动生成）
     max_age: 86400  # Session 有效期
@@ -270,6 +271,18 @@ monitor:
     enabled: false       # 启用 OpenTelemetry
     endpoint: ""         # OTLP Collector 地址
     service_name: ai-gateway
+
+smtp:
+  enabled: false         # 启用邮件发送
+  host: ""               # SMTP 服务器地址
+  port: 587              # SMTP 端口
+  username: ""           # SMTP 认证用户名
+  password: ""           # SMTP 认证密码
+  from: ""               # 发件人地址
+  use_tls: true          # 使用 TLS 加密
+  log_reset_link: false  # 将重置链接输出到 stderr
+
+config_reload_interval: 30s  # 配置热重载间隔
 ```
 
 #### 环境变量配置
@@ -312,6 +325,16 @@ monitor:
 | `AG_MONITOR_OTEL_ENABLED` | `false` | 启用 OpenTelemetry（链路追踪 + 指标导出） |
 | `AG_MONITOR_OTEL_ENDPOINT` | `""` | OTLP Collector 地址（如 `http://localhost:4318`） |
 | `AG_MONITOR_OTEL_SERVICE_NAME` | `ai-gateway` | OTel 服务名称（在 Jaeger/Tempo 中标识） |
+| `AG_CONFIG_RELOAD_INTERVAL` | `30s` | 配置文件热重载间隔（如 `10s`、`1m`），设为 `0` 禁用 |
+| `AG_SERVER_DOMAIN` | `http://localhost:18080` | 服务公网域名，用于密码重置邮件中的链接 |
+| `AG_SMTP_ENABLED` | `false` | 启用邮件发送（密码重置等） |
+| `AG_SMTP_HOST` | `""` | SMTP 服务器地址 |
+| `AG_SMTP_PORT` | `587` | SMTP 端口（587 STARTTLS / 465 TLS） |
+| `AG_SMTP_USERNAME` | `""` | SMTP 认证用户名 |
+| `AG_SMTP_PASSWORD` | `""` | SMTP 认证密码 |
+| `AG_SMTP_FROM` | `""` | 发件人地址（如 `noreply@example.com`） |
+| `AG_SMTP_USE_TLS` | `true` | 使用 TLS 加密连接 |
+| `AG_SMTP_LOG_RESET_LINK` | `false` | 将密码重置链接输出到 stderr（用于 `docker logs` 查看） |
 
 ### 数据库配置
 
