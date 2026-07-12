@@ -1,0 +1,38 @@
+name: GitGuardian Secrets Detection
+
+# ============================================================
+# GitGuardian ggshield 密钥泄露检测
+# 检测代码和 git 历史中的 API Key、Token、证书等
+# 免费额度：25 次/天（公开仓库足够）
+# ============================================================
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    # 每周一 08:00 UTC 全量扫描
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    name: GitGuardian Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # 完整 git 历史，检测历史中的泄露
+
+      - name: GitGuardian Scan
+        uses: GitGuardian/ggshield/actions/secrets_scan@main
+        env:
+          # 注意：公开仓库无需 API Key
+          # 私有仓库需要在 GitHub Secrets 中设置 GITGUARDIAN_API_KEY
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY || '' }}
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_PULL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

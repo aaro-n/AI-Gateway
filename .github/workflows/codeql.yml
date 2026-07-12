@@ -1,0 +1,64 @@
+name: CodeQL Analysis
+
+# ============================================================
+# CodeQL 代码安全分析（SAST）
+# 支持语言: Go, JavaScript/TypeScript
+# 检测: SQL 注入、XSS、路径遍历、硬编码凭据、不安全的加密等
+# ============================================================
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'server/**'
+      - 'web/src/**'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'server/**'
+      - 'web/src/**'
+  schedule:
+    # 每周六 08:00 UTC 自动扫描
+    - cron: '0 8 * * 6'
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['go', 'javascript-typescript']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild (Go)
+        if: matrix.language == 'go'
+        uses: github/codeql-action/autobuild@v3
+        with:
+          working-directory: server
+
+      - name: Autobuild (JavaScript/TypeScript)
+        if: matrix.language == 'javascript-typescript'
+        uses: github/codeql-action/autobuild@v3
+        with:
+          working-directory: web
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{matrix.language}}'

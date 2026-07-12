@@ -1,0 +1,66 @@
+# ============================================================
+# Dependabot 依赖自动更新配置
+# 自动检测有漏洞的依赖并提交 PR 升级
+# ============================================================
+
+version: 2
+updates:
+  # ---- Go 模块 (server/go.mod) ----
+  - package-ecosystem: "gomod"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "go"
+    # 每组最多 5 个 PR，避免刷屏
+    open-pull-requests-limit: 5
+    # 自动 rebase
+    rebase-strategy: "auto"
+
+  # ---- npm 模块 (web/package.json) ----
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "javascript"
+    open-pull-requests-limit: 5
+    rebase-strategy: "auto"
+    ignore:
+      # 忽略 patch 版本更新，减少噪音（安全更新仍会触发）
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
+
+  # ---- Docker 基础镜像 (Dockerfile) ----
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "docker"
+    open-pull-requests-limit: 3
+
+  # ---- GitHub Actions ----
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "ci"
+    open-pull-requests-limit: 3
