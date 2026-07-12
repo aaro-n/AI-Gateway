@@ -43,10 +43,7 @@ Docker 镜像推送至 [GitHub Container Registry](https://github.com/aaro-n/AI-
 ### 拉取镜像
 
 ```bash
-# 登录 GHCR（需要 GitHub Personal Access Token，read:packages 权限）
-echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_USERNAME --password-stdin
-
-# 拉取对应版本
+# 无需登录，直接拉取（GHCR 公开包）
 docker pull ghcr.io/aaro-n/ai-gateway:test        # 测试版（每次 push，仅 amd64）
 docker pull ghcr.io/aaro-n/ai-gateway:prerelease   # 预发行通用版（amd64 + arm64）
 docker pull ghcr.io/aaro-n/ai-gateway:latest       # 正式发行通用版（amd64 + arm64）
