@@ -288,26 +288,48 @@ func classifyCall(matched, isDirect bool) string {
 	return "direct"
 }
 
-// route 根据 AccessMode 选择路由方式
+// route 根据 AccessMode 选择路由方式。
+// - hybrid: 直通优先，找不到再走映射
+// - mapping: 映射优先，找不到再走直通（兼容用户在映射 Key 上添加直通模型的场景）
+// - direct: 仅直通
 func (h *UnifiedGatewayHandler) route(apiKey model.Key, modelName string) (*router.RouteResult, bool, error) {
-	// direct / hybrid 模式先尝试直通
-	if apiKey.AccessMode == "direct" || apiKey.AccessMode == "hybrid" {
+	if apiKey.AccessMode == "hybrid" {
+		// hybrid: 直通优先
 		directResult, err := h.modelRouter.RouteDirect(modelName, apiKey.ID)
 		if err == nil && directResult != nil {
 			return directResult, true, nil
 		}
+		// fallback 映射
+		mappedResult, err := h.modelRouter.Route(modelName)
+		if err != nil {
+			return nil, false, err
+		}
+		return mappedResult, false, nil
 	}
 
-	if apiKey.AccessMode == "direct" {
-		return nil, false, fmt.Errorf("direct model not found: %s", modelName)
+	if apiKey.AccessMode == "mapping" {
+		// mapping: 映射优先
+		mappedResult, err := h.modelRouter.Route(modelName)
+		if err == nil && mappedResult != nil {
+			return mappedResult, false, nil
+		}
+		// fallback 直通：允许在映射 Key 上同时配置直通模型
+		directResult, err := h.modelRouter.RouteDirect(modelName, apiKey.ID)
+		if err == nil && directResult != nil {
+			return directResult, true, nil
+		}
+		return nil, false, fmt.Errorf("no available provider for model: %s", modelName)
 	}
 
-	// mapping 模式
-	mappedResult, err := h.modelRouter.Route(modelName)
+	// direct: 仅直通
+	directResult, err := h.modelRouter.RouteDirect(modelName, apiKey.ID)
 	if err != nil {
 		return nil, false, err
 	}
-	return mappedResult, false, nil
+	if directResult == nil {
+		return nil, false, fmt.Errorf("direct model not found: %s", modelName)
+	}
+	return directResult, true, nil
 }
 
 // routeAll 返回所有候选项，用于 failover 循环
@@ -323,16 +345,33 @@ func (h *UnifiedGatewayHandler) routeAll(apiKey model.Key, modelName string) ([]
 		return nil, false, fmt.Errorf("direct model not found: %s", modelName)
 	}
 
-	if apiKey.AccessMode == "hybrid" {
+	if apiKey.AccessMode == "hybrid" || apiKey.AccessMode == "mapping" {
+		// hybrid: 直通优先 + 映射；mapping: 映射优先 + 直通 fallback
+		// 两者都合并全部候选，首选项由 route() 的优先级决定
 		directResults, _ := h.modelRouter.RouteAllDirect(modelName, apiKey.ID)
 		mappedResults, _ := h.modelRouter.RouteAll(modelName)
-		results := make([]*router.RouteResult, 0, len(directResults)+len(mappedResults))
-		for _, r := range directResults {
-			results = append(results, r)
+
+		// 按模式决定合并顺序
+		var results []*router.RouteResult
+		if apiKey.AccessMode == "hybrid" {
+			results = make([]*router.RouteResult, 0, len(directResults)+len(mappedResults))
+			for _, r := range directResults {
+				results = append(results, r)
+			}
+			for _, r := range mappedResults {
+				results = append(results, r)
+			}
+		} else {
+			// mapping: 映射优先
+			results = make([]*router.RouteResult, 0, len(mappedResults)+len(directResults))
+			for _, r := range mappedResults {
+				results = append(results, r)
+			}
+			for _, r := range directResults {
+				results = append(results, r)
+			}
 		}
-		for _, r := range mappedResults {
-			results = append(results, r)
-		}
+
 		if len(results) > 0 {
 			// 确定首选项类型
 			_, isDirect, _ := h.route(apiKey, modelName)
@@ -341,7 +380,7 @@ func (h *UnifiedGatewayHandler) routeAll(apiKey model.Key, modelName string) ([]
 		return nil, false, fmt.Errorf("no available provider for model: %s", modelName)
 	}
 
-	// mapping mode
+	// fallback: mapping only (should not reach here normally)
 	results, err := h.modelRouter.RouteAll(modelName)
 	if err != nil {
 		return nil, false, err

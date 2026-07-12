@@ -26,6 +26,13 @@ func init() {
 			if key == "" {
 				key = c.Query("key")
 			}
+			// Debug 页通过 Authorization: Bearer 传递 key，兼容此方式
+			if key == "" {
+				auth := c.GetHeader("Authorization")
+				if len(auth) > 7 && auth[:7] == "Bearer " {
+					key = auth[7:]
+				}
+			}
 			return key
 		},
 		NewProvider: func(cfg *registry.Config) registry.Provider {

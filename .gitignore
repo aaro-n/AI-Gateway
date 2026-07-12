@@ -3,3 +3,7 @@ data.db
 server/data.db
 server/bin/
 other/
+
+# Docker
+pgdata/
+.env

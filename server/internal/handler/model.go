@@ -77,12 +77,13 @@ type modelInfoResponse struct {
 }
 
 type providerBasicResponse struct {
-	ID               uint   `json:"id"`
-	Name             string `json:"name"`
-	OpenAIBaseURL    string `json:"openai_base_url"`
-	AnthropicBaseURL string `json:"anthropic_base_url"`
-	GeminiBaseURL    string `json:"gemini_base_url"`
-	DeepSeekBaseURL  string `json:"deepseek_base_url"`
+	ID               uint              `json:"id"`
+	Name             string            `json:"name"`
+	Endpoints        map[string]string `json:"endpoints,omitempty"`
+	OpenAIBaseURL    string            `json:"openai_base_url,omitempty"`
+	AnthropicBaseURL string            `json:"anthropic_base_url,omitempty"`
+	GeminiBaseURL    string            `json:"gemini_base_url,omitempty"`
+	DeepSeekBaseURL  string            `json:"deepseek_base_url,omitempty"`
 }
 
 func NewModelHandler() *ModelHandler {
@@ -509,6 +510,7 @@ func toMappingResponse(m model.ModelMapping) mappingResponse {
 		providerResp = &providerBasicResponse{
 			ID:               m.Provider.ID,
 			Name:             m.Provider.Name,
+			Endpoints:        m.Provider.EndpointsMap(),
 			OpenAIBaseURL:    m.Provider.OpenAIBaseURL,
 			AnthropicBaseURL: m.Provider.AnthropicBaseURL,
 			GeminiBaseURL:    m.Provider.GeminiBaseURL,

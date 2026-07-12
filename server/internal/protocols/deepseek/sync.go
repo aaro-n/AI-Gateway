@@ -4,16 +4,47 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+
+	_ "embed"
 
 	"ai-gateway/internal/core/registry"
 )
 
 // =============================================================================
-// SyncModels — 从 DeepSeek API 同步模型列表
+// SyncModels — API 优先，本地补齐缺失字段，API 不可用时纯本地兜底
 // =============================================================================
 
+//go:embed models.json
+var localModelsJSON []byte
+
+// modelEntry 对应 models.json 中的单条模型配置
+type modelEntry struct {
+	ID             string `json:"id"`
+	DisplayName    string `json:"display_name"`
+	OwnedBy        string `json:"owned_by"`
+	ContextWindow  int    `json:"context_window"`
+	MaxOutput      int    `json:"max_output"`
+	SupportsVision bool   `json:"supports_vision"`
+	SupportsTools  bool   `json:"supports_tools"`
+	SupportsStream bool   `json:"supports_stream"`
+}
+
+func loadLocalModels() (map[string]modelEntry, error) {
+	var entries []modelEntry
+	if err := json.Unmarshal(localModelsJSON, &entries); err != nil {
+		return nil, err
+	}
+	m := make(map[string]modelEntry, len(entries))
+	for _, e := range entries {
+		m[e.ID] = e
+	}
+	return m, nil
+}
+
+// deepseekModelEntry API 返回的模型结构
 type deepseekModelEntry struct {
 	ID                  string `json:"id"`
 	OwnedBy             string `json:"owned_by"`
@@ -25,6 +56,97 @@ type deepseekModelEntry struct {
 }
 
 func (p *DeepSeekProvider) SyncModels(providerID uint) ([]registry.ProviderModel, error) {
+	localMap, err := loadLocalModels()
+	if err != nil {
+		return nil, err
+	}
+
+	// 尝试 API
+	apiModels, apiErr := p.fetchModels()
+	if apiErr != nil {
+		log.Printf("[DeepSeek] Models API unavailable (%v), using local models only (%d)", apiErr, len(localMap))
+		return buildFromLocal(providerID, localMap), nil
+	}
+	log.Printf("[DeepSeek] API=%d models, local=%d models", len(apiModels), len(localMap))
+
+	// --- API 成功：遍历 API 为主线，本地补齐缺失 + 本地独有的追加 ---
+	result := make([]registry.ProviderModel, 0, len(apiModels)+len(localMap))
+	seen := map[string]bool{}
+
+	for _, api := range apiModels {
+		id := api.ID
+		if id == "" || isNonChat(id) {
+			continue
+		}
+		local, hasLocal := localMap[id]
+
+		// API 值优先；API 未返回（== 0 或 \"\"）时用本地补齐
+		ctx := api.ContextLength
+		if ctx == 0 {
+			ctx = api.MaxInputTokens
+		}
+		out := api.MaxCompletionTokens
+		if out == 0 {
+			out = api.MaxTokens
+		}
+		name := api.DisplayName
+		ownedBy := api.OwnedBy
+		vis := false
+
+		if hasLocal {
+			if ctx == 0 {
+				ctx = local.ContextWindow
+			}
+			if out == 0 {
+				out = local.MaxOutput
+			}
+			vis = local.SupportsVision
+			if name == "" {
+				name = local.DisplayName
+			}
+			if ownedBy == "" {
+				ownedBy = local.OwnedBy
+			}
+		}
+		if name == "" {
+			name = id
+		}
+		if ownedBy == "" {
+			ownedBy = "deepseek"
+		}
+
+		seen[id] = true
+		result = append(result, registry.ProviderModel{
+			ProviderID:     providerID,
+			ModelID:        id,
+			DisplayName:    name,
+			OwnedBy:        ownedBy,
+			ContextWindow:  ctx,
+			MaxOutput:      out,
+			SupportsVision: vis,
+			SupportsTools:  localBool(hasLocal, local.SupportsTools, true),
+			SupportsStream: localBool(hasLocal, local.SupportsStream, true),
+			IsAvailable:    true,
+			Source:         "sync",
+		})
+	}
+
+	// 本地有但 API 没有的模型 → 追加
+	for id, local := range localMap {
+		if seen[id] {
+			continue
+		}
+		result = append(result, toProviderModel(providerID, local))
+	}
+
+	return result, nil
+}
+
+// =============================================================================
+// 兜底 & 工具函数
+// =============================================================================
+
+func (p *DeepSeekProvider) fetchModels() ([]deepseekModelEntry, error) {
 	req, err := http.NewRequest("GET", p.cfg.BaseURL+"/models", nil)
 	if err != nil {
 		return nil, err
@@ -48,58 +170,41 @@ func (p *DeepSeekProvider) SyncModels(providerID uint) ([]registry.ProviderModel
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
+	return result.Data, nil
+}
 
-	models := make([]registry.ProviderModel, 0, len(result.Data))
-	for _, m := range result.Data {
-		if m.ID == "" {
-			continue
-		}
-		// 跳过非 chat 模型
-		if strings.Contains(m.ID, "embedding") || strings.Contains(m.ID, "moderation") ||
-			strings.Contains(m.ID, "whisper") || strings.Contains(m.ID, "tts") {
-			continue
-		}
+func isNonChat(id string) bool {
+	return strings.Contains(id, "embedding") || strings.Contains(id, "moderation") ||
+		strings.Contains(id, "whisper") || strings.Contains(id, "tts")
+}
 
-		displayName := m.DisplayName
-		if displayName == "" {
-			displayName = m.ID
-		}
-
-		contextWindow := m.ContextLength
-		if contextWindow == 0 {
-			contextWindow = m.MaxInputTokens
-		}
-
-		maxOutput := m.MaxCompletionTokens
-		if maxOutput == 0 {
-			maxOutput = m.MaxTokens
-		}
-
-		// 兜底：API 未返回时使用已知模型默认值
-		if contextWindow == 0 || maxOutput == 0 {
-			if def, ok := deepseekModelDefaults[m.ID]; ok {
-				if contextWindow == 0 {
-					contextWindow = def.contextWindow
-				}
-				if maxOutput == 0 {
-					maxOutput = def.maxOutput
-				}
-			}
-		}
-
-		models = append(models, registry.ProviderModel{
-			ProviderID:     providerID,
-			ModelID:        m.ID,
-			DisplayName:    displayName,
-			OwnedBy:        m.OwnedBy,
-			ContextWindow:  contextWindow,
-			MaxOutput:      maxOutput,
-			SupportsVision: detectDeepSeekVision(m.ID),
-			SupportsTools:  true,
-			SupportsStream: true,
-			IsAvailable:    true,
-			Source:         "sync",
-		})
+func buildFromLocal(providerID uint, localMap map[string]modelEntry) []registry.ProviderModel {
+	result := make([]registry.ProviderModel, 0, len(localMap))
+	for _, e := range localMap {
+		result = append(result, toProviderModel(providerID, e))
 	}
-	return models, nil
+	return result
+}
+
+func toProviderModel(providerID uint, e modelEntry) registry.ProviderModel {
+	return registry.ProviderModel{
+		ProviderID:     providerID,
+		ModelID:        e.ID,
+		DisplayName:    e.DisplayName,
+		OwnedBy:        e.OwnedBy,
+		ContextWindow:  e.ContextWindow,
+		MaxOutput:      e.MaxOutput,
+		SupportsVision: e.SupportsVision,
+		SupportsTools:  e.SupportsTools,
+		SupportsStream: e.SupportsStream,
+		IsAvailable:    true,
+		Source:         "sync",
+	}
+}
+
+func localBool(hasLocal bool, localVal, fallback bool) bool {
+	if hasLocal {
+		return localVal
+	}
+	return fallback
 }

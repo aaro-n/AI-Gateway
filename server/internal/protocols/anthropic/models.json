@@ -1,0 +1,72 @@
+[
+  {
+    "id": "claude-opus-4-8",
+    "display_name": "Claude Opus 4.8",
+    "owned_by": "anthropic",
+    "context_window": 1000000,
+    "max_output": 128000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Claude Sonnet 4.6",
+    "owned_by": "anthropic",
+    "context_window": 1000000,
+    "max_output": 128000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-haiku-4-5",
+    "display_name": "Claude Haiku 4.5",
+    "owned_by": "anthropic",
+    "context_window": 200000,
+    "max_output": 64000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-opus-4-7",
+    "display_name": "Claude Opus 4.7",
+    "owned_by": "anthropic",
+    "context_window": 1000000,
+    "max_output": 128000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-opus-4-6",
+    "display_name": "Claude Opus 4.6",
+    "owned_by": "anthropic",
+    "context_window": 1000000,
+    "max_output": 128000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-sonnet-4-5",
+    "display_name": "Claude Sonnet 4.5",
+    "owned_by": "anthropic",
+    "context_window": 200000,
+    "max_output": 64000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "claude-opus-4-5",
+    "display_name": "Claude Opus 4.5",
+    "owned_by": "anthropic",
+    "context_window": 200000,
+    "max_output": 64000,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  }
+]

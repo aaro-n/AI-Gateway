@@ -1,0 +1,22 @@
+[
+  {
+    "id": "deepseek-v4-flash",
+    "display_name": "DeepSeek V4 Flash",
+    "owned_by": "deepseek",
+    "context_window": 131072,
+    "max_output": 16384,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  },
+  {
+    "id": "deepseek-v4-pro",
+    "display_name": "DeepSeek V4 Pro",
+    "owned_by": "deepseek",
+    "context_window": 262144,
+    "max_output": 32768,
+    "supports_vision": true,
+    "supports_tools": true,
+    "supports_stream": true
+  }
+]

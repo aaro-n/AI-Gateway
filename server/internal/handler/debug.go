@@ -211,7 +211,7 @@ func (h *DebugHandler) TestProviders(c *gin.Context) {
 				Detail:    curlCmd,
 			})
 
-			// 执行测试（调试页用 1024 tokens 以获得完整响应）
+			// 执行测试（1024 tokens 确保思考模型有足够空间）
 			tr := protocolsPkg.RunTest(proto, baseURL, p.APIKey, testModel, 1024)
 
 			if tr.Success {
@@ -618,7 +618,7 @@ func buildDebugRequestBody(protocol, modelID string) []byte {
 		body = map[string]interface{}{
 			"model":                 modelID,
 			"messages":              []map[string]string{{"role": "user", "content": "Say 'hello' in one word."}},
-			"max_completion_tokens": 5,
+			"max_completion_tokens": 1024,
 			"stream":                false,
 		}
 	}

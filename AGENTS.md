@@ -31,3 +31,23 @@ Before working on any code in this repository, you MUST:
 - `/api/v1/debug/server-logs` is DEBUG level — not visible in default log level
 - Success HTTP requests use `resp_bytes=%d` not `resp=%q` (response body not logged)
 - Gemini 2.5 Pro is a thinking model; maxOutputTokens must be large enough for thoughts+output
+
+## Build Order (IMPORTANT)
+
+Go uses `//go:embed` in `server/res/res.go` to embed `res/web/` into the binary at compile time.  
+Therefore you MUST build in this order:
+
+```bash
+cd web && make build    # 1. Build frontend → ../server/res/web/
+cd ../server && go build ...  # 2. Build backend (embeds frontend assets)
+```
+
+If you only run `go build`, the embedded frontend will be stale (previous build).  
+If you run `npm run build` without `--outDir ../server/res/web/`, frontend lands in `web/dist/` and won't be embedded.
+
+## Quick Reference: Auth & Key Management
+
+- **Gemini AuthExtractor** (in `protocols/gemini/register.go`) reads `x-goog-api-key` header or `?key=` query param. It also has a fallback for `Authorization: Bearer` (added for Debug page compatibility). Other protocols (OpenAI, DeepSeek, OpenRouter) use `Authorization: Bearer`; Anthropic uses `x-api-key`.
+- **Debug page `TestKey`** constructs HTTP requests to the gateway endpoint (e.g. `POST /gateway/gemini/...`), going through full AuthExtractor → key lookup → routing chain. The auth header must match the protocol's AuthExtractor.
+- **`createFormatForKey`** auto-generates an OpenAI-format key when creating a non-OpenAI key. This is intentional for compatibility (OpenAI is the hub protocol). The primary format is the first non-OpenAI key in the `formats` map.
+- **Keys list API** returns `direct_count` (key_provider_models entries) and `mapping_count` (key_models entries). A count of 0 means unrestricted for that dimension; the frontend renders "无模型"/"不限制" accordingly.

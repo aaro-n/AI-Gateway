@@ -164,6 +164,32 @@ func (h *ProviderModelHandler) Create(c *gin.Context) {
 	}
 
 	if err := model.DB.Create(&pm).Error; err != nil {
+		// 如果已存在 (duplicate key)，则更新（upsert）
+		var existing model.ProviderModel
+		if err2 := model.DB.Where("provider_id = ? AND model_id = ?", uint(providerID), req.ModelID).First(&existing).Error; err2 == nil {
+			updates := map[string]interface{}{
+				"display_name":    pm.DisplayName,
+				"owned_by":        pm.OwnedBy,
+				"context_window":  pm.ContextWindow,
+				"max_output":      pm.MaxOutput,
+				"input_price":     pm.InputPrice,
+				"output_price":    pm.OutputPrice,
+				"supports_vision": pm.SupportsVision,
+				"supports_tools":  pm.SupportsTools,
+				"supports_stream": pm.SupportsStream,
+				"is_available":    pm.IsAvailable,
+			}
+			// 保留现有 source（不覆盖 manual → sync）
+			if existing.Source != "manual" {
+				updates["source"] = pm.Source
+			}
+			if err3 := model.DB.Model(&existing).Updates(updates).Error; err3 != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err3.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"model": toProviderModelResponse(existing), "updated": true})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -283,6 +309,9 @@ func (h *ProviderModelHandler) Delete(c *gin.Context) {
 
 	// 使用事务确保数据一致性
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("provider_model_id = ?", pm.ID).Delete(&model.KeyProviderModel{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("provider_model_id = ?", pm.ID).Delete(&model.ModelMapping{}).Error; err != nil {
 			return err
 		}

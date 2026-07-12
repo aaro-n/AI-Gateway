@@ -27,10 +27,15 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('key.model')" prop="models" sortable :sort-method="(a: any, b: any) => sortByArrayLength(a, b, 'models')">
+        <el-table-column :label="t('key.model')" prop="models" sortable :sort-method="(a: any, b: any) => (a.direct_count + a.mapping_count) - (b.direct_count + b.mapping_count)">
           <template #default="{ row }">
-            <span v-if="!row.models || row.models.length === 0" style="color: #999">{{ t('key.allModels') }}</span>
-            <span v-else>{{ t('key.allowedCount', { count: row.models.length }) }}</span>
+            <template v-if="row.direct_count === 0 && row.mapping_count === 0">
+              <span style="color: #999">{{ t('key.noModel') }}</span>
+            </template>
+            <template v-else>
+              <span v-if="row.direct_count > 0" style="color: #67C23A; margin-right: 8px;">{{ t('key.directCount', { count: row.direct_count }) }}</span>
+              <span v-if="row.mapping_count > 0" style="color: #E6A23C;">{{ t('key.mappingCountLabel', { count: row.mapping_count }) }}</span>
+            </template>
           </template>
         </el-table-column>
         <el-table-column :label="t('mcp.tools')" prop="mcp_tools_count" sortable>
@@ -113,7 +118,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCopyText } from '@/composables/useCopyText'
 import { getProtocolLabel, getProtocolTagType } from "@/protocols"
 import api from '@/api'
-import { getSortConfig, setSortConfig, sortByArrayLength } from '@/utils/tableSort'
+import { getSortConfig, setSortConfig } from '@/utils/tableSort'
 
 const { t } = useI18n()
 const router = useRouter()

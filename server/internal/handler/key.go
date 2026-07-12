@@ -156,20 +156,21 @@ func createFormatForKey(keyID uint, format string) (map[string]string, error) {
 }
 
 type keyListItemResponse struct {
-	ID                uint               `json:"id"`
-	Key               string             `json:"key"`
-	Name              string             `json:"name"`
-	Enabled           bool               `json:"enabled"`
-	AccessMode        string             `json:"access_mode"`
-	ExpiresAt         *time.Time         `json:"expires_at"`
-	CreatedAt         time.Time          `json:"created_at"`
-	Slug              string             `json:"slug"`
-	Models            []keyModelResponse `json:"models,omitempty"`
-	MCPToolsCount     int                `json:"mcp_tools_count"`
-	MCPResourcesCount int                `json:"mcp_resources_count"`
-	MCPPromptsCount   int                `json:"mcp_prompts_count"`
-	Format            string             `json:"format"` // 主格式
-	Formats           map[string]string  `json:"formats,omitempty"`
+	ID                uint              `json:"id"`
+	Key               string            `json:"key"`
+	Name              string            `json:"name"`
+	Enabled           bool              `json:"enabled"`
+	AccessMode        string            `json:"access_mode"`
+	ExpiresAt         *time.Time        `json:"expires_at"`
+	CreatedAt         time.Time         `json:"created_at"`
+	Slug              string            `json:"slug"`
+	DirectCount       int               `json:"direct_count"`  // 直通模型数量 (key_provider_models)
+	MappingCount      int               `json:"mapping_count"` // 映射模型数量 (key_models)
+	MCPToolsCount     int               `json:"mcp_tools_count"`
+	MCPResourcesCount int               `json:"mcp_resources_count"`
+	MCPPromptsCount   int               `json:"mcp_prompts_count"`
+	Format            string            `json:"format"` // 主格式
+	Formats           map[string]string `json:"formats,omitempty"`
 }
 
 // getPrimaryFormat 从 formats map 中提取主格式。
@@ -215,23 +216,14 @@ func (h *KeyHandler) List(c *gin.Context) {
 			formats[f.Format] = masked
 		}
 
-		models := make([]keyModelResponse, len(k.Models))
-		for j, m := range k.Models {
-			modelName := ""
-			if m.Model != nil {
-				modelName = m.Model.Name
-			}
-			models[j] = keyModelResponse{
-				ID:        m.ID,
-				ModelID:   m.ModelID,
-				ModelName: modelName,
-			}
-		}
-
 		var mcpToolsCount, mcpResourcesCount, mcppromptsCount int64
 		model.DB.Model(&model.KeyMCPTool{}).Where("key_id = ?", k.ID).Count(&mcpToolsCount)
 		model.DB.Model(&model.KeyMCPResource{}).Where("key_id = ?", k.ID).Count(&mcpResourcesCount)
 		model.DB.Model(&model.KeyMCPPrompt{}).Where("key_id = ?", k.ID).Count(&mcppromptsCount)
+
+		var directCount, mappingCount int64
+		model.DB.Model(&model.KeyProviderModel{}).Where("key_id = ?", k.ID).Count(&directCount)
+		model.DB.Model(&model.KeyModel{}).Where("key_id = ?", k.ID).Count(&mappingCount)
 
 		result[i] = keyListItemResponse{
 			ID:                k.ID,
@@ -243,7 +235,8 @@ func (h *KeyHandler) List(c *gin.Context) {
 			CreatedAt:         k.CreatedAt,
 			Slug:              k.Slug,
 			Format:            getPrimaryFormat(formats),
-			Models:            models,
+			DirectCount:       int(directCount),
+			MappingCount:      int(mappingCount),
 			MCPToolsCount:     int(mcpToolsCount),
 			MCPResourcesCount: int(mcpResourcesCount),
 			MCPPromptsCount:   int(mcppromptsCount),

@@ -101,24 +101,3 @@ func (p *DeepSeekProvider) streamDeepSeekToUnified(ctx context.Context, body io.
 	}()
 	return ch
 }
-
-// deepseekModelDefaults provides known specs for DeepSeek models when the API doesn't return them.
-var deepseekModelDefaults = map[string]struct {
-	contextWindow int
-	maxOutput     int
-	vision        bool
-}{
-	"deepseek-chat":     {131072, 8192, false},
-	"deepseek-reasoner": {131072, 8192, false},
-	"deepseek-v3":       {131072, 8192, false},
-	"deepseek-v4-flash": {131072, 16384, true},
-	"deepseek-v4-pro":   {262144, 32768, true},
-}
-
-// detectDeepSeekVision checks if a DeepSeek model supports vision based on its ID.
-func detectDeepSeekVision(modelID string) bool {
-	if def, ok := deepseekModelDefaults[modelID]; ok {
-		return def.vision
-	}
-	return false
-}

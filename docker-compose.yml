@@ -1,0 +1,23 @@
+# PostgreSQL for AI Gateway
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 数据保存在 ./pgdata/ 目录（已加入 .gitignore，不会提交到 git）
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-gateway-pg
+    restart: unless-stopped
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_DB:-ai_gateway}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres} -d ${PG_DB:-ai_gateway}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
