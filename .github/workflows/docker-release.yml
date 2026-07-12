@@ -1,21 +1,22 @@
 name: Docker Release Build
 
 # ============================================================
-# 正式发行镜像：当 GitHub Release（非预发行）发布时构建
+# 正式发行镜像：推送 v* 格式 tag（排除 rc/beta/alpha）时自动构建
 # 镜像标签: ghcr.io/{owner}/{repo}:latest + :{version}
 # ============================================================
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
   build-and-push:
-    # 仅正式发行（非 pre-release）
-    if: github.event.release.prerelease == false
+    # 排除预发行 tag（v*-rc* / v*-beta* / v*-alpha* / v*-pre*）
+    if: ${{ !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-beta') && !contains(github.ref_name, '-alpha') && !contains(github.ref_name, '-pre') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -45,10 +46,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ github.repository }}
           tags: |
             type=raw,value=latest
-            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
+            type=semver,pattern={{version}},value=${{ github.ref_name }}
           labels: |
             org.opencontainers.image.title=AI Gateway
-            org.opencontainers.image.description=AI Gateway ${{ github.event.release.tag_name }}
+            org.opencontainers.image.description=AI Gateway ${{ github.ref_name }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -59,6 +60,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.event.release.tag_name }}
+            VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

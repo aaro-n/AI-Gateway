@@ -1,14 +1,18 @@
 name: Docker Pre-Release Build
 
 # ============================================================
-# 预发行镜像：当 GitHub Pre-Release 发布时构建
+# 预发行镜像：推送 rc/beta/alpha/pre-* tag 时自动构建
 # 也可通过 workflow_dispatch 手动触发
 # 镜像标签: ghcr.io/{owner}/{repo}:prerelease + :{version}
 # ============================================================
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*-rc*'
+      - 'v*-beta*'
+      - 'v*-alpha*'
+      - 'v*-pre*'
   workflow_dispatch:
     inputs:
       version:
@@ -21,9 +25,6 @@ env:
 
 jobs:
   build-and-push:
-    # 仅预发行（prerelease=true）触发
-    # workflow_dispatch 手动触发时不检查此条件
-    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -39,7 +40,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "value=${{ inputs.version }}" >> $GITHUB_OUTPUT
           else
-            echo "value=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            echo "value=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Set up QEMU
