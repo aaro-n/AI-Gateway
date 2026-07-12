@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -53,7 +54,7 @@ type modelResponse struct {
 	SupportsVision   bool              `json:"supports_vision"`
 	SupportsTools    bool              `json:"supports_tools"`
 	SupportsStream   bool              `json:"supports_stream"`
-	CreatedAt        string            `json:"created_at"`
+	CreatedAt        time.Time         `json:"created_at"`
 	Mappings         []mappingResponse `json:"mappings,omitempty"`
 }
 
@@ -126,7 +127,7 @@ func (h *ModelHandler) List(c *gin.Context) {
 			SupportsVision:   supportsVision,
 			SupportsTools:    supportsTools,
 			SupportsStream:   supportsStream,
-			CreatedAt:        a.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:        a.CreatedAt,
 			Mappings:         mappingResponses,
 		}
 	}
@@ -164,7 +165,7 @@ func (h *ModelHandler) Get(c *gin.Context) {
 		Slug:      m.Slug,
 		Model:     m.Name,
 		Enabled:   m.Enabled,
-		CreatedAt: m.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt: m.CreatedAt,
 		Mappings:  mappingResponses,
 	}})
 }
@@ -198,7 +199,7 @@ func (h *ModelHandler) Create(c *gin.Context) {
 		Model:        m.Name,
 		Enabled:      m.Enabled,
 		MappingCount: 0,
-		CreatedAt:    m.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:    m.CreatedAt,
 	}})
 }
 
@@ -257,7 +258,7 @@ func (h *ModelHandler) Update(c *gin.Context) {
 		Slug:      m.Slug,
 		Model:     m.Name,
 		Enabled:   m.Enabled,
-		CreatedAt: m.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt: m.CreatedAt,
 		Mappings:  mappingResponses,
 	}})
 }

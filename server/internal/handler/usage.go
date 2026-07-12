@@ -4,10 +4,27 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 
 	"ai-gateway/internal/model"
 )
+
+// userTimeZone 从 session 获取当前用户的时区偏好。
+// 用户未设置时区时回退到服务器本地时区（time.Local，由 AG_TIME_ZONE 配置）。
+func userTimeZone(c *gin.Context) *time.Location {
+	session := sessions.Default(c)
+	userID := session.Get("user_id")
+	if userID != nil {
+		var user model.User
+		if err := model.DB.Select("time_zone").First(&user, userID).Error; err == nil && user.TimeZone != "" {
+			if loc, err := time.LoadLocation(user.TimeZone); err == nil {
+				return loc
+			}
+		}
+	}
+	return time.Local
+}
 
 type UsageHandler struct{}
 
@@ -28,10 +45,12 @@ func NewUsageHandler() *UsageHandler {
 
 func (h *UsageHandler) Dashboard(c *gin.Context) {
 	nDays := 7
-	// 使用 UTC 计算边界，与 SQLite date() 函数时区一致
-	// SQLite date('2026-06-27 00:02:56+08:00') → 2026-06-26 (UTC)
-	nDaysAgo := time.Now().UTC().AddDate(0, 0, -nDays).Format("2006-01-02")
-	lastNDays := generateLastNDays(nDays + 1)
+	// 按当前用户时区计算日边界，与下方 groupByDate 的 Go 端时区处理一致。
+	// 数据库存储 UTC，此处用用户时区转换，避免 SQLite/PostgreSQL DATE() 行为差异。
+	userLoc := userTimeZone(c)
+	now := time.Now().In(userLoc)
+	nDaysAgo := now.AddDate(0, 0, -nDays).Format("2006-01-02")
+	lastNDays := generateLastNDaysIn(nDays+1, userLoc)
 
 	// 资产统计
 	var totalProviders int64
@@ -91,46 +110,55 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		Where("created_at >= ?", nDaysAgo).
 		Select("COALESCE(AVG(latency_ms), 0)").Scan(&modelAvgLatency)
 
-	var modelDailyStats []dailyStat
-	model.DB.Raw(`
-		SELECT 
-			DATE(created_at) as date,
-			COUNT(*) as count,
-			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success
-		FROM model_logs
-		WHERE created_at >= ?
-		GROUP BY DATE(created_at)
-		ORDER BY date
-	`, nDaysAgo).Scan(&modelDailyStats)
-
-	modelDailyStats = fillDailyStats(lastNDays, modelDailyStats,
-		func(s dailyStat) string {
-			if len(s.Date) > 10 {
-				return s.Date[:10]
-			}
-			return s.Date
+	// 按本地时区在 Go 端分组，避免 SQLite/PostgreSQL DATE() 时区行为差异
+	var modelDailyRows []struct {
+		CreatedAt time.Time
+		Status    string
+	}
+	model.DB.Model(&model.ModelLog{}).
+		Select("created_at, status").
+		Where("created_at >= ?", nDaysAgo).
+		Scan(&modelDailyRows)
+	modelDailyStats := groupByDate(lastNDays, modelDailyRows,
+		func(r struct {
+			CreatedAt time.Time
+			Status    string
+		}) string {
+			return r.CreatedAt.In(userLoc).Format("2006-01-02")
 		},
-		func(date string) dailyStat { return dailyStat{Date: date} })
-
-	var modelTokenDailyStats []tokenDailyStat
-	model.DB.Raw(`
-		SELECT 
-			DATE(created_at) as date,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
-		FROM model_logs
-		WHERE created_at >= ?
-		GROUP BY DATE(created_at)
-		ORDER BY date
-	`, nDaysAgo).Scan(&modelTokenDailyStats)
-
-	modelTokenDailyStats = fillDailyStats(lastNDays, modelTokenDailyStats,
-		func(s tokenDailyStat) string {
-			if len(s.Date) > 10 {
-				return s.Date[:10]
+		func(date string) dailyStat { return dailyStat{Date: date} },
+		func(acc *dailyStat, r struct {
+			CreatedAt time.Time
+			Status    string
+		}) {
+			acc.Count++
+			if r.Status == "success" {
+				acc.Success++
 			}
-			return s.Date
+		})
+
+	var modelTokenRows []struct {
+		CreatedAt   time.Time
+		TotalTokens int64
+	}
+	model.DB.Model(&model.ModelLog{}).
+		Select("created_at, total_tokens").
+		Where("created_at >= ?", nDaysAgo).
+		Scan(&modelTokenRows)
+	modelTokenDailyStats := groupByDate(lastNDays, modelTokenRows,
+		func(r struct {
+			CreatedAt   time.Time
+			TotalTokens int64
+		}) string {
+			return r.CreatedAt.In(userLoc).Format("2006-01-02")
 		},
-		func(date string) tokenDailyStat { return tokenDailyStat{Date: date} })
+		func(date string) tokenDailyStat { return tokenDailyStat{Date: date} },
+		func(acc *tokenDailyStat, r struct {
+			CreatedAt   time.Time
+			TotalTokens int64
+		}) {
+			acc.TotalTokens += r.TotalTokens
+		})
 
 	var providerStats []struct {
 		Provider   string  `json:"provider"`
@@ -217,26 +245,32 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		Where("created_at >= ?", nDaysAgo).
 		Select("COALESCE(AVG(latency_ms), 0)").Scan(&mcpAvgLatency)
 
-	var mcpDailyStats []dailyStat
-	model.DB.Raw(`
-		SELECT 
-			DATE(created_at) as date,
-			COUNT(*) as count,
-			SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success
-		FROM mcp_logs
-		WHERE created_at >= ?
-		GROUP BY DATE(created_at)
-		ORDER BY date
-	`, nDaysAgo).Scan(&mcpDailyStats)
-
-	mcpDailyStats = fillDailyStats(lastNDays, mcpDailyStats,
-		func(s dailyStat) string {
-			if len(s.Date) > 10 {
-				return s.Date[:10]
-			}
-			return s.Date
+	// 按本地时区在 Go 端分组，避免 SQLite/PostgreSQL DATE() 时区行为差异
+	var mcpDailyRows []struct {
+		CreatedAt time.Time
+		Status    string
+	}
+	model.DB.Model(&model.MCPLog{}).
+		Select("created_at, status").
+		Where("created_at >= ?", nDaysAgo).
+		Scan(&mcpDailyRows)
+	mcpDailyStats := groupByDate(lastNDays, mcpDailyRows,
+		func(r struct {
+			CreatedAt time.Time
+			Status    string
+		}) string {
+			return r.CreatedAt.In(userLoc).Format("2006-01-02")
 		},
-		func(date string) dailyStat { return dailyStat{Date: date} })
+		func(date string) dailyStat { return dailyStat{Date: date} },
+		func(acc *dailyStat, r struct {
+			CreatedAt time.Time
+			Status    string
+		}) {
+			acc.Count++
+			if r.Status == "success" {
+				acc.Success++
+			}
+		})
 
 	var mcpTypeStats []struct {
 		MCPType string `json:"mcp_type"`
@@ -262,22 +296,6 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 		ORDER BY count DESC
 		LIMIT 10
 	`, nDaysAgo).Scan(&mcpServiceStats)
-
-	for i := range modelDailyStats {
-		if len(modelDailyStats[i].Date) > 10 {
-			modelDailyStats[i].Date = modelDailyStats[i].Date[:10]
-		}
-	}
-	for i := range modelTokenDailyStats {
-		if len(modelTokenDailyStats[i].Date) > 10 {
-			modelTokenDailyStats[i].Date = modelTokenDailyStats[i].Date[:10]
-		}
-	}
-	for i := range mcpDailyStats {
-		if len(mcpDailyStats[i].Date) > 10 {
-			mcpDailyStats[i].Date = mcpDailyStats[i].Date[:10]
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"days": nDays,
@@ -321,8 +339,9 @@ func (h *UsageHandler) Dashboard(c *gin.Context) {
 	})
 }
 
-func generateLastNDays(n int) []string {
-	now := time.Now().UTC()
+// generateLastNDaysIn 生成最近 n 天的日期序列（YYYY-MM-DD），按指定时区计算。
+func generateLastNDaysIn(n int, loc *time.Location) []string {
+	now := time.Now().In(loc)
 	days := make([]string, n)
 	for i := 0; i < n; i++ {
 		offset := -n + 1 + i
@@ -331,18 +350,28 @@ func generateLastNDays(n int) []string {
 	return days
 }
 
-func fillDailyStats[T any](days []string, stats []T, getDate func(T) string, createEmpty func(string) T) []T {
-	statsMap := make(map[string]T)
-	for _, s := range stats {
-		statsMap[getDate(s)] = s
-	}
-
-	result := make([]T, len(days))
+// groupByDate 按日期字符串（由 getDate 从每行提取，通常用本地时区格式化）将日志行
+// 聚合到 days 序列对应的桶中。缺失日期用 createEmpty 填充。
+//
+// 这样做是为了避免 SQLite DATE()（按 UTC）与 PostgreSQL DATE()（按服务器时区）
+// 的行为差异——所有日期归属统一在 Go 端按 time.Local（由 AG_TIME_ZONE 配置）计算。
+func groupByDate[T any, Acc any](
+	days []string,
+	rows []T,
+	getDate func(T) string,
+	createEmpty func(string) Acc,
+	accumulate func(acc *Acc, row T),
+) []Acc {
+	result := make([]Acc, len(days))
+	idx := make(map[string]int, len(days))
 	for i, day := range days {
-		if s, ok := statsMap[day]; ok {
-			result[i] = s
-		} else {
-			result[i] = createEmpty(day)
+		result[i] = createEmpty(day)
+		idx[day] = i
+	}
+	for _, r := range rows {
+		d := getDate(r)
+		if i, ok := idx[d]; ok {
+			accumulate(&result[i], r)
 		}
 	}
 	return result
@@ -372,20 +401,21 @@ type modelLogResponse struct {
 }
 
 func (h *UsageHandler) ModelLogs(c *gin.Context) {
-	startDate := c.DefaultQuery("start_date", time.Now().Format("2006-01-02 00:00:00"))
-	endDate := c.DefaultQuery("end_date", time.Now().AddDate(0, 0, 1).Format("2006-01-02 00:00:00"))
+	userLoc := userTimeZone(c)
+	startDate := c.DefaultQuery("start_date", time.Now().In(userLoc).Format("2006-01-02 00:00:00"))
+	endDate := c.DefaultQuery("end_date", time.Now().In(userLoc).AddDate(0, 0, 1).Format("2006-01-02 00:00:00"))
 
-	startTime, err := time.ParseInLocation("2006-01-02 15:04:05", startDate, time.Local)
+	startTime, err := time.ParseInLocation("2006-01-02 15:04:05", startDate, userLoc)
 	if err != nil {
-		startTime, err = time.ParseInLocation("2006-01-02", startDate, time.Local)
+		startTime, err = time.ParseInLocation("2006-01-02", startDate, userLoc)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start date format"})
 			return
 		}
 	}
-	endTime, err := time.ParseInLocation("2006-01-02 15:04:05", endDate, time.Local)
+	endTime, err := time.ParseInLocation("2006-01-02 15:04:05", endDate, userLoc)
 	if err != nil {
-		endTime, err = time.ParseInLocation("2006-01-02", endDate, time.Local)
+		endTime, err = time.ParseInLocation("2006-01-02", endDate, userLoc)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end date format"})
 			return
@@ -470,20 +500,21 @@ type mcpLogResponse struct {
 }
 
 func (h *UsageHandler) MCPLogs(c *gin.Context) {
-	startDate := c.DefaultQuery("start_date", time.Now().Format("2006-01-02 00:00:00"))
-	endDate := c.DefaultQuery("end_date", time.Now().AddDate(0, 0, 1).Format("2006-01-02 00:00:00"))
+	userLoc := userTimeZone(c)
+	startDate := c.DefaultQuery("start_date", time.Now().In(userLoc).Format("2006-01-02 00:00:00"))
+	endDate := c.DefaultQuery("end_date", time.Now().In(userLoc).AddDate(0, 0, 1).Format("2006-01-02 00:00:00"))
 
-	startTime, err := time.ParseInLocation("2006-01-02 15:04:05", startDate, time.Local)
+	startTime, err := time.ParseInLocation("2006-01-02 15:04:05", startDate, userLoc)
 	if err != nil {
-		startTime, err = time.ParseInLocation("2006-01-02", startDate, time.Local)
+		startTime, err = time.ParseInLocation("2006-01-02", startDate, userLoc)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start date format"})
 			return
 		}
 	}
-	endTime, err := time.ParseInLocation("2006-01-02 15:04:05", endDate, time.Local)
+	endTime, err := time.ParseInLocation("2006-01-02 15:04:05", endDate, userLoc)
 	if err != nil {
-		endTime, err = time.ParseInLocation("2006-01-02", endDate, time.Local)
+		endTime, err = time.ParseInLocation("2006-01-02", endDate, userLoc)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end date format"})
 			return

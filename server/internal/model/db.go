@@ -24,9 +24,12 @@ type User struct {
 	PasswordHash string
 	Role         string `gorm:"default:admin"`
 	Enabled      bool   `gorm:"type:boolean;default:true"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    gorm.DeletedAt
+	// TimeZone 用户偏好时区（IANA 时区名，如 "Asia/Shanghai"、"America/New_York"）。
+	// 空值表示使用服务器默认时区（AG_TIME_ZONE）。
+	TimeZone  string `gorm:"size:64;default:''"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt gorm.DeletedAt
 }
 
 func (User) TableName() string {
@@ -539,7 +542,7 @@ func InitDB(
 		if err = os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
-		dsn := dbPath + "?_loc=auto"
+		dsn := dbPath + "?_loc=UTC"
 		log.Printf("[Database] Connecting to SQLite: path=%s", dbPath)
 		dialector = sqlite.Open(dsn)
 	default:
@@ -551,8 +554,11 @@ func InitDB(
 		logLevel = logger.Info
 	}
 
+	// NowFunc 统一返回 UTC 时间，确保 CreatedAt/UpdatedAt 在 SQLite 和 PostgreSQL
+	// 中都存储为 UTC 绝对时刻。展示层通过 time.Location 按用户时区格式化。
 	DB, err = gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logLevel),
+		Logger:  logger.Default.LogMode(logLevel),
+		NowFunc: func() time.Time { return time.Now().UTC() },
 	})
 	if err != nil {
 		log.Printf("[Database] Failed to connect to database: %v", err)
@@ -581,9 +587,10 @@ func InitDB(
 		return err
 	}
 
-	// 初始化旧记录的 enabled 字段（NULL/0 → true）
-	DB.Exec("UPDATE key_models SET enabled = 1 WHERE enabled IS NULL OR enabled = 0")
-	DB.Exec("UPDATE key_provider_models SET enabled = 1 WHERE enabled IS NULL OR enabled = 0")
+	// 初始化旧记录的 enabled 字段（NULL/false → true）
+	// 使用 true/false 字面量：SQLite 接受（true=1,false=0），PostgreSQL boolean 列也接受
+	DB.Exec("UPDATE key_models SET enabled = true WHERE enabled IS NULL OR enabled = false")
+	DB.Exec("UPDATE key_provider_models SET enabled = true WHERE enabled IS NULL OR enabled = false")
 
 	if err := migrateKeyFormats(); err != nil {
 		return err

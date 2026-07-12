@@ -46,6 +46,12 @@ server:
     - "192.168.0.0/16"
                         # Environment variable: AG_SERVER_TRUSTED_PROXIES (comma-separated)
   
+  timezone: Asia/Shanghai  # Application time zone for date display and daily statistics.
+                        # Database stores UTC; this setting controls local-time conversion.
+                        # Examples: "UTC", "Asia/Shanghai", "America/New_York", "Europe/London"
+                        # Full list: see IANA Time Zone Database (tzdata)
+                        # Environment variable: AG_TIME_ZONE
+  
   # Session Configuration
   # Controls user session management
   session:

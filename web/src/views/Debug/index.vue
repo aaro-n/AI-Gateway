@@ -196,7 +196,7 @@
                       class="log-line"
                       :class="'log-' + log.level"
                     >
-                      <span class="log-time">{{ log.timestamp }}</span>
+                      <span class="log-time">{{ formatLogTime(log.timestamp) }}</span>
                       <span class="log-level-tag">{{ log.level.toUpperCase() }}</span>
                       <span class="log-msg">{{ log.message }}</span>
                       <pre v-if="log.detail" class="log-detail">{{ log.detail }}</pre>
@@ -235,7 +235,7 @@
               class="log-line"
               :class="'log-' + log.level.toLowerCase()"
             >
-              <span class="log-time">{{ log.timestamp }}</span>
+              <span class="log-time">{{ formatLogTime(log.timestamp) }}</span>
               <span class="log-level-tag">{{ log.level.toUpperCase() }}</span>
               <span class="log-msg">{{ log.message }}</span>
               <span v-if="log.trace_id" class="log-trace">trace:{{ log.trace_id }}</span>
@@ -258,6 +258,7 @@ import { useI18n } from 'vue-i18n'
 import { Refresh } from '@element-plus/icons-vue'
 import api from '@/api'
 import ConversionBadge from './ConversionBadge.vue'
+import { formatLogTime } from '@/utils/format'
 
 const { t } = useI18n()
 

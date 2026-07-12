@@ -186,7 +186,14 @@ export default {
     oldPassword: 'Old Password',
     newPassword: 'New Password',
     confirmPassword: 'Confirm Password',
-    passwordChanged: 'Password changed successfully'
+    passwordChanged: 'Password changed successfully',
+    timeZone: 'Time Zone',
+    timeZoneLabel: 'Time Zone',
+    timeZoneHint: 'Affects dashboard daily statistics and log time display. Database stores UTC; this only controls display time zone.',
+    timeZonePlaceholder: 'Select time zone',
+    timeZoneSaved: 'Time zone saved',
+    timeZoneAuto: 'Browser local time',
+    timeZoneCurrent: 'Current'
   },
   modelMapping: {
     create: 'Create Mapping',

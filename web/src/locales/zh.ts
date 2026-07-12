@@ -186,7 +186,14 @@ export default {
     oldPassword: '旧密码',
     newPassword: '新密码',
     confirmPassword: '确认密码',
-    passwordChanged: '密码修改成功'
+    passwordChanged: '密码修改成功',
+    timeZone: '时区设置',
+    timeZoneLabel: '时区',
+    timeZoneHint: '影响仪表盘每日统计归属和日志时间显示。数据库统一存 UTC，此处设置仅控制展示时区。',
+    timeZonePlaceholder: '选择时区',
+    timeZoneSaved: '时区设置已保存',
+    timeZoneAuto: '浏览器本地时区',
+    timeZoneCurrent: '当前'
   },
   modelMapping: {
     create: '创建映射',

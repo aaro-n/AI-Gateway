@@ -256,7 +256,8 @@ func (h *KeyHandler) Create(c *gin.Context) {
 
 	var expiresAt *time.Time
 	if req.ExpiresAt != nil {
-		t, err := time.Parse("2006-01-02 15:04:05", *req.ExpiresAt)
+		// 用户输入按服务器本地时区（AG_TIME_ZONE）解析，存储时由 GORM NowFunc 转 UTC
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", *req.ExpiresAt, time.Local)
 		if err == nil {
 			expiresAt = &t
 		}
@@ -394,7 +395,7 @@ func (h *KeyHandler) Update(c *gin.Context) {
 		updates["name"] = *req.Name
 	}
 	if req.ExpiresAt != nil {
-		if t, err := time.Parse("2006-01-02 15:04:05", *req.ExpiresAt); err == nil {
+		if t, err := time.ParseInLocation("2006-01-02 15:04:05", *req.ExpiresAt, time.Local); err == nil {
 			updates["expires_at"] = t
 		}
 	}

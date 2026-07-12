@@ -50,21 +50,21 @@ type updateProviderModelRequest struct {
 }
 
 type providerModelResponse struct {
-	ID             uint    `json:"id"`
-	ProviderID     uint    `json:"provider_id"`
-	ModelID        string  `json:"model_id"`
-	DisplayName    string  `json:"display_name"`
-	OwnedBy        string  `json:"owned_by"`
-	ContextWindow  int     `json:"context_window"`
-	MaxOutput      int     `json:"max_output"`
-	InputPrice     float64 `json:"input_price"`
-	OutputPrice    float64 `json:"output_price"`
-	SupportsVision bool    `json:"supports_vision"`
-	SupportsTools  bool    `json:"supports_tools"`
-	SupportsStream bool    `json:"supports_stream"`
-	IsAvailable    bool    `json:"is_available"`
-	Source         string  `json:"source"`
-	CreatedAt      string  `json:"created_at"`
+	ID             uint      `json:"id"`
+	ProviderID     uint      `json:"provider_id"`
+	ModelID        string    `json:"model_id"`
+	DisplayName    string    `json:"display_name"`
+	OwnedBy        string    `json:"owned_by"`
+	ContextWindow  int       `json:"context_window"`
+	MaxOutput      int       `json:"max_output"`
+	InputPrice     float64   `json:"input_price"`
+	OutputPrice    float64   `json:"output_price"`
+	SupportsVision bool      `json:"supports_vision"`
+	SupportsTools  bool      `json:"supports_tools"`
+	SupportsStream bool      `json:"supports_stream"`
+	IsAvailable    bool      `json:"is_available"`
+	Source         string    `json:"source"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 func NewProviderModelHandler() *ProviderModelHandler {
@@ -87,7 +87,7 @@ func toProviderModelResponse(m model.ProviderModel) providerModelResponse {
 		SupportsStream: m.SupportsStream,
 		IsAvailable:    m.IsAvailable,
 		Source:         m.Source,
-		CreatedAt:      m.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:      m.CreatedAt,
 	}
 }
 

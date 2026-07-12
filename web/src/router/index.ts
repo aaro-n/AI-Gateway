@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { setUserTimeZone } from '@/utils/format'
 
 const routes = [
   {
@@ -38,11 +39,13 @@ const router = createRouter({
 
 router.beforeEach(async (to, from, next) => {
   const userStore = useUserStore()
-  
+
   if (!userStore.user) {
     await userStore.fetchUser()
+    // 同步用户时区到 format 工具，供全局时间格式化使用
+    setUserTimeZone(userStore.timeZone)
   }
-  
+
   if (to.meta.requiresAuth !== false && !userStore.isLoggedIn) {
     next('/login')
   } else if (to.path === '/login' && userStore.isLoggedIn) {

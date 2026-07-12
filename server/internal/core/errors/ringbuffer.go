@@ -8,6 +8,9 @@ import (
 )
 
 // LogEntry 单条日志记录
+// Timestamp 存 RFC3339 UTC 字符串（如 "2026-07-12T09:00:00.000Z"），
+// 前端按用户时区（User.TimeZone）用 Intl.DateTimeFormat 格式化显示。
+// RFC3339 字符串定长可排序，可直接用字符串比较做增量过滤。
 type LogEntry struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"`
@@ -103,7 +106,7 @@ func appendToRing(r slog.Record) {
 	}
 
 	entry := LogEntry{
-		Timestamp: r.Time.Format("15:04:05.000"),
+		Timestamp: r.Time.UTC().Format(time.RFC3339Nano),
 		Level:     r.Level.String(),
 		Message:   r.Message,
 	}
@@ -133,7 +136,7 @@ func PushRingEntry(level, message, traceID string) {
 	}
 
 	entry := LogEntry{
-		Timestamp: time.Now().Format("15:04:05.000"),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Level:     level,
 		Message:   message,
 		TraceID:   traceID,

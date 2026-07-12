@@ -97,7 +97,7 @@ type recentLogEntry struct {
 	Source          string          `json:"source"`
 	ConvStatus      string          `json:"conv_status"`
 	ConvDetail      json.RawMessage `json:"conv_detail,omitempty"`
-	CreatedAt       string          `json:"created_at"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 // =============================================================================
@@ -123,7 +123,7 @@ func (h *DebugHandler) TestProviders(c *gin.Context) {
 	}
 
 	results := make([]providerTestResult, 0)
-	now := func() string { return time.Now().Format("15:04:05.000") }
+	now := func() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 	for _, p := range providers {
 		protocols := p.SupportedProtocols()
@@ -272,7 +272,7 @@ func (h *DebugHandler) TestKey(c *gin.Context) {
 		return
 	}
 
-	now := func() string { return time.Now().Format("15:04:05.000") }
+	now := func() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 	logs := make([]debugLogEntry, 0)
 
 	// Step 1: 查询 Key 信息
@@ -546,7 +546,7 @@ func (h *DebugHandler) RecentLogs(c *gin.Context) {
 			ErrorMsg:        log.ErrorMsg,
 			Source:          log.Source,
 			ConvStatus:      log.ConvStatus,
-			CreatedAt:       log.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:       log.CreatedAt,
 		}
 
 		// 如果有 conv_status，解析出转换详情

@@ -284,6 +284,7 @@ monitor:
 | `AG_DEBUG_MCP` | `false` | MCP 调试日志, 请求/响应记录到 `debug_mcp/` 目录 |
 | `AG_SERVER_PORT` | `18080` | 服务端口 |
 | `AG_SERVER_TRUSTED_PROXIES` | `10.0.0.0/8,192.168.0.0/16,172.16.0.0/12` | 信任的代理IP CIDR范围（逗号分隔），用于获取真实客户端IP |
+| `AG_TIME_ZONE` | `Asia/Shanghai` | 应用时区，影响日期显示和每日统计归属。数据库统一存 UTC，此变量控制本地时区转换。示例：`UTC`、`Asia/Shanghai`、`America/New_York`、`Europe/London`（IANA 时区名） |
 | `AG_PPROF_PORT` | `6060` | Pprof 性能分析端口 |
 | `AG_DATABASE_TYPE` | `sqlite` | 数据库类型 (sqlite/postgres) |
 | `AG_DATABASE_PATH` | `data.db` | SQLite 数据库路径 |

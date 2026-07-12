@@ -45,7 +45,8 @@ type ServerConfig struct {
 	Port            int `validate:"min=1,max=65535"`
 	TrustedProxies  []string
 	Session         SessionConfig
-	TestConcurrency int // 模型测试并发数，默认 5，环境变量 AG_TEST_CONCURRENCY
+	TestConcurrency int    // 模型测试并发数，默认 5，环境变量 AG_TEST_CONCURRENCY
+	TimeZone        string // 应用时区，如 "Asia/Shanghai"、"UTC"，默认 "UTC"，环境变量 AG_TIME_ZONE
 }
 
 type DebugConfig struct {
@@ -151,6 +152,7 @@ func Load() *Config {
 			Port:            getInt("AG_SERVER_PORT", yamlCfg.Server.Port),
 			TrustedProxies:  trustedProxies,
 			TestConcurrency: getInt("AG_TEST_CONCURRENCY", yamlCfg.Server.TestConcurrency),
+			TimeZone:        getEnv("AG_TIME_ZONE", yamlCfg.Server.TimeZone),
 			Session: SessionConfig{
 				Secret:   secret,
 				MaxAge:   getInt("AG_SERVER_SESSION_MAX_AGE", yamlCfg.Server.Session.MaxAge),
@@ -198,12 +200,27 @@ func Load() *Config {
 	}
 
 	applyDefaults()
+	applyTimeZone(cfg.Server.TimeZone)
 	if err := validate.Struct(cfg); err != nil {
 		log.Fatalf("[Config] Validation failed: %v", err)
 	}
 	logConfig()
 
 	return cfg
+}
+
+// applyTimeZone 加载并应用全局时区到 time.Local。
+// 无效时区会回退到 UTC 并记录警告。必须在日志/统计逻辑使用时间前调用。
+func applyTimeZone(tz string) {
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Printf("[Config] Warning: invalid time zone %q: %v, falling back to UTC", tz, err)
+		loc = time.UTC
+	}
+	time.Local = loc
 }
 
 func applyDefaults() {
@@ -231,6 +248,9 @@ func applyDefaults() {
 	}
 	if cfg.Server.TestConcurrency <= 0 {
 		cfg.Server.TestConcurrency = 5
+	}
+	if cfg.Server.TimeZone == "" {
+		cfg.Server.TimeZone = "Asia/Shanghai"
 	}
 
 	poolDefaults := getPoolDefaults(cfg.Database.Type)
@@ -355,6 +375,7 @@ func logConfig() {
 	}
 	log.Printf("  Server Port: %d", cfg.Server.Port)
 	log.Printf("  Trusted Proxies: %v", cfg.Server.TrustedProxies)
+	log.Printf("  Time Zone: %s", cfg.Server.TimeZone)
 	log.Printf("  Database Type: %s", cfg.Database.Type)
 	if cfg.Database.Type == "sqlite" {
 		log.Printf("  Database Path: %s", cfg.Database.Path)
@@ -403,8 +424,8 @@ func (c *Config) DSN() string {
 		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 			c.Database.Host, c.Database.Port, c.Database.Username, c.Database.Password, c.Database.DBName)
 	case "sqlite":
-		return fmt.Sprintf("%s?_loc=auto", c.Database.Path)
+		return fmt.Sprintf("%s?_loc=UTC", c.Database.Path)
 	default:
-		return fmt.Sprintf("%s?_loc=auto", c.Database.Path)
+		return fmt.Sprintf("%s?_loc=UTC", c.Database.Path)
 	}
 }

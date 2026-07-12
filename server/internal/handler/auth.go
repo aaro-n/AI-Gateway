@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -86,10 +87,52 @@ func (h *AuthHandler) Me(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
+			"id":        user.ID,
+			"username":  user.Username,
+			"role":      user.Role,
+			"time_zone": user.TimeZone,
 		},
+	})
+}
+
+// updateTimeZoneRequest 更新用户时区请求
+type updateTimeZoneRequest struct {
+	TimeZone string `json:"time_zone" binding:"required"`
+}
+
+// UpdateTimeZone 更新当前用户的时区偏好。
+// 时区为 IANA 时区名（如 "Asia/Shanghai"、"America/New_York"、"UTC"）。
+// 空字符串或无效时区返回错误。
+func (h *AuthHandler) UpdateTimeZone(c *gin.Context) {
+	var req updateTimeZoneRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 验证时区有效性
+	if _, err := time.LoadLocation(req.TimeZone); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid time zone: " + err.Error()})
+		return
+	}
+
+	session := sessions.Default(c)
+	userID := session.Get("user_id")
+
+	var user model.User
+	if err := model.DB.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	if err := model.DB.Model(&user).Update("time_zone", req.TimeZone).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update time zone"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "time zone updated",
+		"time_zone": req.TimeZone,
 	})
 }
 

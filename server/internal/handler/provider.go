@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -47,7 +48,7 @@ type providerResponse struct {
 	Enabled      bool                    `json:"enabled"`
 	Priority     int                     `json:"priority"`
 	Models       []providerModelResponse `json:"models,omitempty"`
-	CreatedAt    string                  `json:"created_at"`
+	CreatedAt    time.Time               `json:"created_at"`
 }
 
 func NewProviderHandler() *ProviderHandler {
@@ -142,7 +143,7 @@ func (h *ProviderHandler) List(c *gin.Context) {
 			Enabled:      p.Enabled,
 			Priority:     p.Priority,
 			Models:       models,
-			CreatedAt:    p.CreatedAt.Format("2006-01-02 15:04:05"),
+			CreatedAt:    p.CreatedAt,
 		}
 	}
 
@@ -176,7 +177,7 @@ func (h *ProviderHandler) Get(c *gin.Context) {
 		Enabled:      provider.Enabled,
 		Priority:     provider.Priority,
 		Models:       models,
-		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:    provider.CreatedAt,
 	}})
 }
 
@@ -213,7 +214,7 @@ func (h *ProviderHandler) Create(c *gin.Context) {
 		APIKeyMasked: maskAPIKey(provider.APIKey),
 		Enabled:      provider.Enabled,
 		Priority:     provider.Priority,
-		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:    provider.CreatedAt,
 	}})
 }
 
@@ -343,7 +344,7 @@ func (h *ProviderHandler) Update(c *gin.Context) {
 		Enabled:      provider.Enabled,
 		Priority:     provider.Priority,
 		Models:       models,
-		CreatedAt:    provider.CreatedAt.Format("2006-01-02 15:04:05"),
+		CreatedAt:    provider.CreatedAt,
 	}})
 }
 

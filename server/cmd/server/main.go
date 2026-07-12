@@ -198,6 +198,7 @@ func main() {
 		{
 			protected.GET("/auth/me", authHandler.Me)
 			protected.PUT("/auth/password", authHandler.ChangePassword)
+			protected.PUT("/auth/timezone", authHandler.UpdateTimeZone)
 
 			protected.GET("/providers", providerHandler.List)
 			protected.GET("/providers/meta/protocols", providerHandler.GetProtocolsMeta)
