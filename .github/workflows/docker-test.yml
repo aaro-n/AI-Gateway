@@ -10,7 +10,16 @@ on:
     branches:
       - '**'
     tags-ignore:
-      - '**'          # 排除 tag push，避免和 release workflow 冲突
+      - '**'
+    paths:
+      # 仅代码变更时构建，跳过纯文档/配置修改
+      - 'server/**'
+      - 'web/**'
+      - 'Dockerfile'
+      - 'Makefile'
+      - '.github/workflows/docker-test.yml'
+      - '.github/workflows/docker-prerelease.yml'
+      - '.github/workflows/docker-release.yml'
 
 env:
   REGISTRY: ghcr.io
