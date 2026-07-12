@@ -36,6 +36,48 @@
 | 模型用量-1 | 模型用量-2 | 模型用量-3 | MCP用量-1 |
 | ![模型用量_1](images/模型用量_1.png) | ![模型用量_2](images/模型用量_2.png) | ![模型用量_3](images/模型用量_3.png) | ![MCP用量_1](images/MCP用量_1.png) |
 
+## 快速部署
+
+Docker 镜像推送至 [GitHub Container Registry](https://github.com/aaro-n/AI-Gateway/pkgs/container/ai-gateway)。
+
+### 拉取镜像
+
+```bash
+# 登录 GHCR（需要 GitHub Personal Access Token，read:packages 权限）
+echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+
+# 拉取对应版本
+docker pull ghcr.io/aaro-n/ai-gateway:test        # 测试版（每次 push，仅 amd64）
+docker pull ghcr.io/aaro-n/ai-gateway:prerelease   # 预发行通用版（amd64 + arm64）
+docker pull ghcr.io/aaro-n/ai-gateway:latest       # 正式发行通用版（amd64 + arm64）
+docker pull ghcr.io/aaro-n/ai-gateway:v0.0.1-rc3   # 指定版本号
+```
+
+### 零配置启动（SQLite）
+
+```bash
+docker run -d -p 18080:18080 ghcr.io/aaro-n/ai-gateway:latest
+```
+
+打开 `http://localhost:18080`，默认管理员 `admin` / `admin`。
+
+### docker-compose 部署（PostgreSQL）
+
+```bash
+cp .env.example .env && docker compose up -d
+```
+
+### 架构支持
+
+| 镜像标签 | linux/amd64 | linux/arm64 |
+|----------|:-----------:|:-----------:|
+| `:test` | ✅ | ❌ |
+| `:prerelease` | ✅ | ✅ |
+| `:latest` | ✅ | ✅ |
+| `:v*` | ✅ | ✅ |
+
+> 完整环境变量说明见 `.env.example` 和 `web/README.md`。
+
 ## 工作原理
 
 ### 请求处理流程
