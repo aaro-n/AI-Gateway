@@ -71,6 +71,34 @@ database:
                         # Environment variable: AG_DATABASE_PATH
   
   # PostgreSQL Configuration (used when type=postgres)
+  #
+  # Method 1: Connection URL / DSN (recommended)
+  # Supports both URL format and key=value format (pgx native):
+  #
+  #   URL format:
+  #     postgres://user:pass@host:port/dbname?sslmode=require
+  #     postgres://user:pass@host:port/dbname?sslmode=verify-full&sslrootcert=/path/to/ca.pem&sslcert=/path/to/cert.pem&sslkey=/path/to/key.pem
+  #
+  #   Key=value format (Supabase / PgBouncer / pooled connections):
+  #     host=your-host.pooler.example.com user=your-user password=your-password dbname=your-db port=6543 sslmode=require
+  #
+  #   Supported SSL modes in query string or key=value:
+  #     disable | allow | prefer | require | verify-ca | verify-full
+  #
+  #   Advanced pgx parameters (key=value format only):
+  #     default_query_exec_mode=simple_protocol  (required for some pooled connections)
+  #     sslrootcert=/path/to/ca.pem
+  #     sslcert=/path/to/client-cert.pem
+  #     sslkey=/path/to/client-key.pem
+  #
+  #   NOTE: pgx pool parameters (pool_max_conns, pool_max_conn_lifetime) are ignored.
+  #         Use the pool section below instead — GORM manages the connection pool.
+  #
+  # URL takes precedence over individual fields below when both are set.
+  url: ""               # PostgreSQL connection URL or key=value DSN
+                        # Environment variable: AG_DATABASE_URL
+
+  # Method 2: Individual fields (ignored if url is set)
   host: localhost       # PostgreSQL server host
                         # Environment variable: AG_DATABASE_HOST
   port: 5432            # PostgreSQL server port

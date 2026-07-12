@@ -97,6 +97,7 @@ func main() {
 	if err := model.InitDB(
 		cfg.Database.Type,
 		cfg.Database.Path,
+		cfg.Database.URL,
 		cfg.Database.Host,
 		cfg.Database.Port,
 		cfg.Database.Username,

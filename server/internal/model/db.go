@@ -515,7 +515,7 @@ func (u *MCPLog) String() string {
 }
 
 func InitDB(
-	dbType, dbPath, dbHost string, dbPort int, dbUser, dbPassword, dbName string,
+	dbType, dbPath, dbURL, dbHost string, dbPort int, dbUser, dbPassword, dbName string,
 	maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration,
 	debug bool,
 ) error {
@@ -524,9 +524,15 @@ func InitDB(
 
 	switch dbType {
 	case "postgres":
-		dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-			dbHost, dbPort, dbUser, dbPassword, dbName)
-		log.Printf("[Database] Connecting to PostgreSQL: host=%s, port=%d, dbname=%s", dbHost, dbPort, dbName)
+		var dsn string
+		if dbURL != "" {
+			dsn = dbURL
+			log.Printf("[Database] Connecting to PostgreSQL via URL")
+		} else {
+			dsn = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+				dbHost, dbPort, dbUser, dbPassword, dbName)
+			log.Printf("[Database] Connecting to PostgreSQL: host=%s, port=%d, dbname=%s", dbHost, dbPort, dbName)
+		}
 		dialector = postgres.Open(dsn)
 	case "sqlite":
 		dir := filepath.Dir(dbPath)

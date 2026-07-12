@@ -51,7 +51,7 @@ RUN cd server && CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} \
     -o bin/ai-gateway-server -v ./cmd/server/main.go
 
 # ---- 阶段2: 运行时 ----
-FROM alpine:latest
+FROM alpine:3.21
 
 # 运行时依赖
 # ca-certificates: HTTPS/TLS 证书验证

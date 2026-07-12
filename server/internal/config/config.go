@@ -58,6 +58,7 @@ type DebugConfig struct {
 
 type DatabaseConfig struct {
 	Type     string `validate:"oneof=sqlite postgres"`
+	URL      string // PostgreSQL 连接 URL（postgres://user:pass@host:port/dbname?sslmode=...），优先级高于独立字段
 	Path     string
 	Host     string
 	Port     int `validate:"min=0,max=65535"`
@@ -160,6 +161,7 @@ func Load() *Config {
 		},
 		Database: DatabaseConfig{
 			Type:     getEnv("AG_DATABASE_TYPE", yamlCfg.Database.Type),
+			URL:      getEnv("AG_DATABASE_URL", yamlCfg.Database.URL),
 			Path:     getEnv("AG_DATABASE_PATH", yamlCfg.Database.Path),
 			Host:     getEnv("AG_DATABASE_HOST", yamlCfg.Database.Host),
 			Port:     getInt("AG_DATABASE_PORT", yamlCfg.Database.Port),
@@ -356,6 +358,8 @@ func logConfig() {
 	log.Printf("  Database Type: %s", cfg.Database.Type)
 	if cfg.Database.Type == "sqlite" {
 		log.Printf("  Database Path: %s", cfg.Database.Path)
+	} else if cfg.Database.URL != "" {
+		log.Printf("  Database URL: %s", maskPassword(cfg.Database.URL))
 	} else {
 		log.Printf("  Database Host: %s", cfg.Database.Host)
 		log.Printf("  Database Port: %d", cfg.Database.Port)
@@ -393,6 +397,9 @@ func maskPassword(p string) string {
 func (c *Config) DSN() string {
 	switch c.Database.Type {
 	case "postgres":
+		if c.Database.URL != "" {
+			return c.Database.URL
+		}
 		return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 			c.Database.Host, c.Database.Port, c.Database.Username, c.Database.Password, c.Database.DBName)
 	case "sqlite":

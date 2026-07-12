@@ -22,13 +22,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 完整 git 历史，检测历史中的泄露
 
       - name: GitGuardian Scan
         uses: GitGuardian/ggshield-action@v1
         with:
-          args: secret scan path . --exit-zero
+          args: ${{ github.event_name == 'pull_request' && '' || '--exit-zero' }}
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY || '' }}
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
