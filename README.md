@@ -23,7 +23,11 @@
 - **故障转移**: Provider 连续返回 429 时自动冷却，配置更新时自动恢复
 - **用量统计**: 请求日志和用量仪表盘，区分 call_method（direct/convert），实时监控
 - **可观测性**: 支持 OpenTelemetry + Prometheus 指标导出，请求级 Trace ID
+- **用户管理 & RBAC**: 管理员/普通用户角色，用户增删改查，细粒度权限控制
 - **API Key 管理**: 生成和管理网关 API Key，支持模型/MCP访问权限控制，一键重置
+- **密码重置**: SMTP 邮件发送重置链接，支持忘记密码流程，可输出重置链接到日志
+- **配置热重载**: SIGHUP 信号或管理 API 触发，无需重启即可更新调试/SMTP/时区配置
+- **思考链 (Thinking) 管线**: 跨协议转换时完整保留 thinking/reasoning_content
 - **Web 控制台**: Vue 3 管理界面，支持中英文、暗色模式、表格排序、协议对比
 
 ## 外观
@@ -187,7 +191,7 @@ flowchart TD
 
 ### 环境要求
 
-- Go 1.21+
+- Go 1.24+
 - Node.js 18+
 
 ### 安装运行
@@ -246,6 +250,8 @@ server:
     - "172.16.0.0/12"
     - "192.168.0.0/16"
   test_concurrency: 5  # 模型测试并发数
+  time_zone: UTC  # 应用时区（IANA 时区名，如 Asia/Shanghai）
+  default_language: zh # 默认界面语言（zh/en）
   domain: ""     # 公网域名（用于密码重置邮件中的链接，如 http://your-domain:18080）
   session:
     secret: ""    # Session 密钥（自动生成）
@@ -282,8 +288,6 @@ smtp:
   from: ""               # 发件人地址
   use_tls: true          # 使用 TLS 加密
   log_reset_link: false  # 将重置链接输出到 stderr
-
-config_reload_interval: 30s  # 配置热重载间隔
 ```
 
 #### 环境变量配置
@@ -298,7 +302,7 @@ config_reload_interval: 30s  # 配置热重载间隔
 | `AG_DEBUG_MCP` | `false` | MCP 调试日志, 请求/响应记录到 `debug_mcp/` 目录 |
 | `AG_SERVER_PORT` | `18080` | 服务端口 |
 | `AG_SERVER_TRUSTED_PROXIES` | `10.0.0.0/8,192.168.0.0/16,172.16.0.0/12` | 信任的代理IP CIDR范围（逗号分隔），用于获取真实客户端IP |
-| `AG_TIME_ZONE` | `Asia/Shanghai` | 应用时区，影响日期显示和每日统计归属。数据库统一存 UTC，此变量控制本地时区转换。示例：`UTC`、`Asia/Shanghai`、`America/New_York`、`Europe/London`（IANA 时区名） |
+| `AG_TIME_ZONE` | `UTC` | 应用时区，影响日期显示和每日统计归属。数据库统一存 UTC，此变量控制本地时区转换。示例：`UTC`、`Asia/Shanghai`、`America/New_York`、`Europe/London`（IANA 时区名） |
 | `AG_PPROF_PORT` | `6060` | Pprof 性能分析端口 |
 | `AG_DATABASE_TYPE` | `sqlite` | 数据库类型 (sqlite/postgres) |
 | `AG_DATABASE_PATH` | `data.db` | SQLite 数据库路径 |
@@ -327,8 +331,8 @@ config_reload_interval: 30s  # 配置热重载间隔
 | `AG_MONITOR_OTEL_ENABLED` | `false` | 启用 OpenTelemetry（链路追踪 + 指标导出） |
 | `AG_MONITOR_OTEL_ENDPOINT` | `""` | OTLP Collector 地址（如 `http://localhost:4318`） |
 | `AG_MONITOR_OTEL_SERVICE_NAME` | `ai-gateway` | OTel 服务名称（在 Jaeger/Tempo 中标识） |
-| `AG_CONFIG_RELOAD_INTERVAL` | `30s` | 配置文件热重载间隔（如 `10s`、`1m`），设为 `0` 禁用 |
 | `AG_SERVER_DOMAIN` | `http://localhost:18080` | 服务公网域名，用于密码重置邮件中的链接 |
+| `AG_DEFAULT_LANGUAGE` | `zh` | 默认界面语言（`zh` / `en`） |
 | `AG_SMTP_ENABLED` | `false` | 启用邮件发送（密码重置等） |
 | `AG_SMTP_HOST` | `""` | SMTP 服务器地址 |
 | `AG_SMTP_PORT` | `587` | SMTP 端口（587 STARTTLS / 465 TLS） |
@@ -427,24 +431,34 @@ POST /mcp/v1                       # MCP JSON-RPC 2.0 端点
 ### 管理接口 (需要登录)
 
 ```
+# ── 认证 ──
 POST /api/v1/auth/login                 # 登录
 POST /api/v1/auth/logout                # 登出
-GET  /api/v1/auth/me                    # 当前用户
+POST /api/v1/auth/forgot-password       # 忘记密码（发送重置邮件）
+POST /api/v1/auth/reset-password        # 重置密码
+GET  /api/v1/auth/me                    # 当前用户信息
 PUT  /api/v1/auth/password              # 修改密码
+PUT  /api/v1/auth/timezone              # 修改时区
+PUT  /api/v1/auth/profile               # 修改个人信息
+PUT  /api/v1/auth/username              # 修改用户名
 
+# ── 厂商管理 ──
 GET  /api/v1/providers                  # 厂商列表
 POST /api/v1/providers                  # 创建厂商
+GET  /api/v1/providers/:id              # 厂商详情
 PUT  /api/v1/providers/:id              # 更新厂商
 DELETE /api/v1/providers/:id            # 删除厂商
 POST /api/v1/providers/:id/test         # 测试连接
 POST /api/v1/providers/:id/sync         # 同步模型
+POST /api/v1/providers/:id/test-custom  # 测试自定义模型
 GET  /api/v1/providers/:id/models       # 厂商模型列表
 POST /api/v1/providers/:id/models       # 添加厂商模型
 PUT  /api/v1/providers/:id/models/:mid  # 更新厂商模型
 DELETE /api/v1/providers/:id/models/:mid # 删除厂商模型
 POST /api/v1/providers/:id/models/lookup # 查找模型
-POST /api/v1/providers/:id/test-custom  # 测试自定义模型
+POST /api/v1/providers/:id/models/:mid/test  # 测试厂商模型
 
+# ── 虚拟模型与映射 ──
 GET  /api/v1/models                     # 虚拟模型列表
 POST /api/v1/models                     # 创建虚拟模型
 GET  /api/v1/models/:id                 # 模型详情
@@ -456,45 +470,75 @@ PUT  /api/v1/models/:id/mappings/:mid   # 更新映射
 DELETE /api/v1/models/:id/mappings/:mid # 删除映射
 POST /api/v1/models/:id/test            # 测试模型
 
-GET  /api/v1/keys                       # API Key 列表
-POST /api/v1/keys                       # 创建 API Key
-PUT  /api/v1/keys/:id                   # 更新 API Key
-DELETE /api/v1/keys/:id                 # 删除 API Key
-POST /api/v1/keys/:id/reset             # 重置 API Key
-GET  /api/v1/keys/:id/models            # 获取 Key 的模型权限
-PUT  /api/v1/keys/:id/models            # 更新 Key 的模型权限
-DELETE  /api/v1/keys/:id/models         # 清空 Key 模型映射白名单
-PUT    /api/v1/keys/:id/models         # 全部允许 Key 模型映射
-GET    /api/v1/keys/:id/providers       # Key 厂商白名单
-POST   /api/v1/keys/:id/providers/:pid  # 添加厂商白名单
-DELETE /api/v1/keys/:id/providers/:pid  # 删除厂商白名单
-GET    /api/v1/keys/:id/provider-models # Key 直通模型白名单
-POST   /api/v1/keys/:id/provider-models/:pmid  # 添加直通模型
-DELETE /api/v1/keys/:id/provider-models/:pmid  # 删除直通模型
-GET  /api/v1/keys/:id/mcp-tools         # 获取 Key 的 MCP 工具权限
-PUT  /api/v1/keys/:id/mcp-tools         # 更新 Key 的 MCP 工具权限
-DELETE  /api/v1/keys/:id/mcp-tools      # 全部允许 Key 的 MCP 工具权限
-GET  /api/v1/keys/:id/mcp-resources     # 获取 Key 的 MCP 资源权限
-PUT  /api/v1/keys/:id/mcp-resources     # 更新 Key 的 MCP 资源权限
-DELETE  /api/v1/keys/:id/mcp-resources  # 全部允许 Key 的 MCP 资源权限
-GET  /api/v1/keys/:id/mcp-prompts       # 获取 Key 的 MCP 提示词权限
-PUT  /api/v1/keys/:id/mcp-prompts       # 更新 Key 的 MCP 提示词权限
-DELETE  /api/v1/keys/:id/mcp-prompts    # 全部允许 Key 的 MCP 提示词权限
+# ── API Key 管理 ──
+GET  /api/v1/keys                       # Key 列表
+POST /api/v1/keys                       # 创建 Key
+PUT  /api/v1/keys/:id                   # 更新 Key
+DELETE /api/v1/keys/:id                 # 删除 Key
+POST /api/v1/keys/:id/reset             # 重置 Key
+GET  /api/v1/keys/:id/models            # Key 模型白名单
+POST /api/v1/keys/:id/models/:mid       # 添加单个模型白名单
+DELETE /api/v1/keys/:id/models/:mid     # 移除单个模型白名单
+DELETE /api/v1/keys/:id/models          # 清空模型白名单
+PUT  /api/v1/keys/:id/models            # 全部允许模型
+GET  /api/v1/keys/:id/providers         # Key 厂商白名单
+POST /api/v1/keys/:id/providers/:pid    # 添加厂商
+DELETE /api/v1/keys/:id/providers/:pid  # 移除厂商
+GET  /api/v1/keys/:id/provider-models   # Key 直通模型白名单
+POST /api/v1/keys/:id/provider-models/:pmid  # 添加直通模型
+DELETE /api/v1/keys/:id/provider-models/:pmid  # 移除直通模型
+DELETE /api/v1/keys/:id/provider-models  # 清空直通模型
+PUT  /api/v1/keys/:id/provider-models    # 全部允许直通模型
+GET  /api/v1/keys/:id/mcp-tools         # Key MCP 工具白名单
+POST /api/v1/keys/:id/mcp-tools/:tid    # 添加 MCP 工具
+DELETE /api/v1/keys/:id/mcp-tools/:tid  # 移除 MCP 工具
+DELETE /api/v1/keys/:id/mcp-tools       # 清空 MCP 工具
+PUT  /api/v1/keys/:id/mcp-tools         # 更新 MCP 工具白名单
+GET  /api/v1/keys/:id/mcp-resources     # Key MCP 资源白名单
+POST /api/v1/keys/:id/mcp-resources/:rid # 添加 MCP 资源
+DELETE /api/v1/keys/:id/mcp-resources/:rid # 移除 MCP 资源
+DELETE /api/v1/keys/:id/mcp-resources    # 清空 MCP 资源
+PUT  /api/v1/keys/:id/mcp-resources      # 更新 MCP 资源白名单
+GET  /api/v1/keys/:id/mcp-prompts       # Key MCP 提示词白名单
+POST /api/v1/keys/:id/mcp-prompts/:pid  # 添加 MCP 提示词
+DELETE /api/v1/keys/:id/mcp-prompts/:pid # 移除 MCP 提示词
+DELETE /api/v1/keys/:id/mcp-prompts      # 清空 MCP 提示词
+PUT  /api/v1/keys/:id/mcp-prompts        # 更新 MCP 提示词白名单
 
+# ── MCP 服务管理 ──
 GET  /api/v1/mcps                       # MCP 服务列表
 POST /api/v1/mcps                       # 创建 MCP 服务
-GET  /api/v1/mcps/:id                   # 获取 MCP 服务
-PUT  /api/v1/mcps/:id                   # 更新 MCP 服务
-DELETE /api/v1/mcps/:id                 # 删除 MCP 服务
-POST /api/v1/mcps/:id/test              # 测试 MCP 服务连接
-POST /api/v1/mcps/:id/sync              # 同步 MCP 服务资源
-GET  /api/v1/mcps/:id/tools             # MCP 工具列表
-GET  /api/v1/mcps/:id/resources         # MCP 资源列表
-GET  /api/v1/mcps/:id/prompts           # MCP 提示词列表
+GET  /api/v1/mcps/:id                   # 服务详情
+PUT  /api/v1/mcps/:id                   # 更新服务
+DELETE /api/v1/mcps/:id                 # 删除服务
+POST /api/v1/mcps/:id/test              # 测试连接
+POST /api/v1/mcps/:id/sync              # 同步资源
+GET  /api/v1/mcps/:id/tools             # 工具列表
+GET  /api/v1/mcps/:id/resources         # 资源列表
+GET  /api/v1/mcps/:id/prompts           # 提示词列表
 
+# ── 用量统计 ──
 GET  /api/v1/usage/dashboard            # 仪表盘数据
-GET  /api/v1/usage/model-logs           # 用量统计
-GET  /api/v1/usage/mcp-logs             # 用量日志
+GET  /api/v1/usage/model-logs           # 模型用量
+GET  /api/v1/usage/mcp-logs             # MCP 用量
+
+# ── 调试 ──
+POST /api/v1/debug/test-providers       # 测试厂商
+POST /api/v1/debug/test-key             # 测试密钥
+GET  /api/v1/debug/server-logs          # 服务端日志
+GET  /api/v1/debug/recent-logs          # 请求追踪
+
+# ── Administrator only ──
+GET    /api/v1/admin/smtp               # 获取 SMTP 配置（密码脱敏）
+POST   /api/v1/admin/smtp               # 保存 SMTP 配置
+POST   /api/v1/admin/smtp/test          # 发送测试邮件
+POST   /api/v1/admin/reload-config      # 热重载配置
+GET    /api/v1/admin/users              # 用户列表
+POST   /api/v1/admin/users              # 创建用户
+PUT    /api/v1/admin/users/:id          # 更新用户
+DELETE /api/v1/admin/users/:id          # 删除用户
+GET    /api/v1/admin/users/:id/permissions  # 用户权限
+PUT    /api/v1/admin/users/:id/permissions  # 更新用户权限
 ```
 
 ## 使用示例
@@ -586,20 +630,21 @@ ai-gateway/
 ├── server/                     # Go 后端
 │   ├── cmd/server/main.go      # 入口
 │   ├── internal/
-│   │   ├── config/             # 配置加载
-│   │   ├── handler/            # HTTP 处理器
-│   │   ├── mcp/                # MCP实现
-│   │   ├── middleware/         # 中间件
-│   │   ├── model/              # 数据模型
+│   │   ├── config/             # 配置加载与热重载
+│   │   ├── email/              # SMTP 邮件发送
+│   │   ├── handler/            # HTTP 处理器（auth/admin/key/model/provider/mcp/user/usage/debug）
+│   │   ├── mcp/                # MCP 客户端实现
+│   │   ├── middleware/         # 中间件（认证/管理员/APIKey）
+│   │   ├── model/              # 数据模型 + GORM AutoMigrate
 │   │   ├── protocols/          # 五协议实现 (openai/anthropic/gemini/deepseek/openrouter)
 │   │   ├── core/
 │   │   │   ├── handler/        # 统一网关处理器
 │   │   │   ├── registry/       # 协议注册表
-│   │   │   ├── unified/        # 统一中间表示 (Unified Request/Response)
+│   │   │   ├── unified/        # 统一中间表示 + Thinking 管线
 │   │   │   └── errors/         # 错误日志 & Trace
 │   │   ├── router/             # 模型路由 (Direct/Mapping/Cooldown)
 │   │   ├── monitor/            # 可观测性 (Prometheus/OpenTelemetry)
-│   ├── res/                    # 静态资源
+│   ├── res/                    # 嵌入前端静态资源
 │   └── go.mod
 └── openspec/                   # 设计文档
 ```
