@@ -55,6 +55,19 @@ jobs:
         with:
           name: build-artifacts
 
+      - name: Detect pre-release
+        id: prerelease
+        run: |
+          TAG="${{ github.ref_name }}"
+          # 包含 rc / beta / alpha / pre 的 tag 视为预发行
+          if echo "$TAG" | grep -qiE '\-(rc|beta|alpha|pre)'; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "Detected pre-release: $TAG"
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "Detected official release: $TAG"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
@@ -65,6 +78,6 @@ jobs:
             Release ${{ github.ref_name }}
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
           files: |
             *

@@ -1,9 +1,20 @@
-# PostgreSQL for AI Gateway
-# 启动: docker compose up -d
-# 停止: docker compose down
-# 数据保存在 ./pgdata/ 目录（已加入 .gitignore，不会提交到 git）
+# ============================================================
+# AI Gateway + PostgreSQL 部署
+#
+# 启动所有服务:  docker compose up -d
+# 仅启动 PG:     docker compose up -d postgres
+# 停止:          docker compose down
+# 数据保存在 ./pgdata/ 目录（已加入 .gitignore）
+#
+# 镜像来源: ghcr.io/{owner}/{repo}
+#   - :test       每次 push 自动构建的测试镜像
+#   - :prerelease 预发行通用镜像（追踪最新 RC/Beta）
+#   - :latest     正式发行通用镜像（追踪最新稳定版）
+#   - :v1.0.0     指定版本号镜像
+# ============================================================
 
 services:
+  # ---- PostgreSQL 数据库 ----
   postgres:
     image: postgres:16-alpine
     container_name: ai-gateway-pg
@@ -21,3 +32,66 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # ---- AI Gateway 应用 ----
+  app:
+    image: ghcr.io/aaro-n/ai-gateway:latest
+    container_name: ai-gateway-app
+    restart: unless-stopped
+    ports:
+      - "${AG_SERVER_PORT:-18080}:18080"
+      - "${AG_PPROF_PORT:-6060}:6060"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # ---- 数据库 ----
+      AG_DATABASE_TYPE: postgres
+      AG_DATABASE_HOST: postgres
+      AG_DATABASE_PORT: 5432
+      AG_DATABASE_USERNAME: ${PG_USER:-postgres}
+      AG_DATABASE_PASSWORD: ${PG_PASSWORD:-postgres}
+      AG_DATABASE_DBNAME: ${PG_DB:-ai_gateway}
+
+      # ---- 管理员 ----
+      AG_ADMIN_USERNAME: ${AG_ADMIN_USERNAME:-admin}
+      AG_ADMIN_PASSWORD: ${AG_ADMIN_PASSWORD:-admin}
+
+      # ---- 服务端口 ----
+      AG_SERVER_PORT: ${AG_SERVER_PORT:-18080}
+      AG_PPROF_PORT: ${AG_PPROF_PORT:-6060}
+
+      # ---- Session（可选，留空自动生成随机密钥）----
+      AG_SERVER_SESSION_SECRET: ${AG_SERVER_SESSION_SECRET:-}
+      AG_SERVER_SESSION_MAX_AGE: ${AG_SERVER_SESSION_MAX_AGE:-86400}
+      AG_SERVER_SESSION_SECURE: ${AG_SERVER_SESSION_SECURE:-false}
+      AG_SERVER_SESSION_SAME_SITE: ${AG_SERVER_SESSION_SAME_SITE:-lax}
+
+      # ---- 日志级别: debug | info | warn | error ----
+      AG_LOG_LEVEL: ${AG_LOG_LEVEL:-info}
+
+      # ---- 调试开关 ----
+      AG_DEBUG_GIN: ${AG_DEBUG_GIN:-false}
+      AG_DEBUG_GORM: ${AG_DEBUG_GORM:-false}
+      AG_DEBUG_PROVIDER: ${AG_DEBUG_PROVIDER:-false}
+      AG_DEBUG_MCP: ${AG_DEBUG_MCP:-false}
+      AG_DEBUG_LOG_FILE: ${AG_DEBUG_LOG_FILE:-}
+
+      # ---- 模型测试并发数 ----
+      AG_TEST_CONCURRENCY: ${AG_TEST_CONCURRENCY:-5}
+
+      # ---- Prometheus 监控（可选）----
+      AG_MONITOR_PROMETHEUS_ENABLED: ${AG_MONITOR_PROMETHEUS_ENABLED:-false}
+      AG_MONITOR_PROMETHEUS_METRICS_TOKEN: ${AG_MONITOR_PROMETHEUS_METRICS_TOKEN:-}
+
+      # ---- OpenTelemetry（可选）----
+      AG_MONITOR_OTEL_ENABLED: ${AG_MONITOR_OTEL_ENABLED:-false}
+      AG_MONITOR_OTEL_ENDPOINT: ${AG_MONITOR_OTEL_ENDPOINT:-}
+      AG_MONITOR_OTEL_SERVICE_NAME: ${AG_MONITOR_OTEL_SERVICE_NAME:-ai-gateway}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18080/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
